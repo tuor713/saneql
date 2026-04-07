@@ -1,0 +1,311 @@
+// SaneQL grammar for LALRPOP.
+// Operator precedence is encoded via grammar tiers (lowest → highest):
+//   Or → And → Not → Cmp → Add → Mul → Pow → Unary → Postfix → Primary
+
+use crate::parser::ast::*;
+use crate::parser::lexer::{Token, LexError, normalize_ident, decode_string, decode_quoted_ident};
+
+grammar<'input>;
+
+// ---------------------------------------------------------------------------
+// Token declarations
+// ---------------------------------------------------------------------------
+
+extern {
+    type Location = usize;
+    type Error    = LexError;
+
+    enum Token<'input> {
+        "ident"   => Token::Ident(<&'input str>),
+        "integer" => Token::Integer(<&'input str>),
+        "float"   => Token::Float(<&'input str>),
+        "string"  => Token::String(<&'input str>),
+
+        "let"   => Token::Let,
+        "defun" => Token::Defun,
+        "null"  => Token::Null,
+        "true"  => Token::True,
+        "false" => Token::False,
+        "table" => Token::Table,
+
+        "&&" => Token::And,
+        "||" => Token::Or,
+        "!"  => Token::Not,
+        "::" => Token::TypeCast,
+        ":=" => Token::ColonEq,
+        "=>" => Token::EqGreater,
+        "<=" => Token::LessEq,
+        ">=" => Token::GreaterEq,
+        "<>" => Token::NotEq,
+        ".." => Token::DotDot,
+
+        "+" => Token::Plus,
+        "-" => Token::Minus,
+        "*" => Token::Star,
+        "/" => Token::Slash,
+        "%" => Token::Percent,
+        "^" => Token::Caret,
+        "<" => Token::Less,
+        ">" => Token::Greater,
+        "=" => Token::Equals,
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        "{" => Token::LCurly,
+        "}" => Token::RCurly,
+        "[" => Token::LSquare,
+        "]" => Token::RSquare,
+        "," => Token::Comma,
+        "." => Token::Dot,
+        ":" => Token::Colon,
+        ";" => Token::Semicolon,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Top-level
+// ---------------------------------------------------------------------------
+
+pub Query: Ast = {
+    DefineFunction,
+    QueryBody,
+};
+
+DefineFunction: Ast = {
+    "defun" <name:Identifier> "(" ")" <body:QueryBody> =>
+        Ast::DefineFunction { name, args: vec![], body: Box::new(body) },
+    "defun" <name:Identifier> "(" <args:LetArgsList> ")" <body:QueryBody> =>
+        Ast::DefineFunction { name, args, body: Box::new(body) },
+};
+
+QueryBody: Ast = {
+    <lets:LetList> <body:Expression> => Ast::QueryBody { lets, body: Box::new(body) },
+};
+
+// ---------------------------------------------------------------------------
+// Let bindings
+// ---------------------------------------------------------------------------
+
+LetList: Vec<LetEntry> = {
+    <mut v:LetList> <e:LetEntry> => { v.push(e); v },
+    => vec![],
+};
+
+LetEntry: LetEntry = {
+    "let" <name:Identifier> <args:LetArgs> ":=" <body:Expression> "," =>
+        LetEntry { name, args, body: Box::new(body) },
+};
+
+LetArgs: Vec<LetArg> = {
+    "(" <v:LetArgsList> ")" => v,
+    => vec![],
+};
+
+LetArgsList: Vec<LetArg> = {
+    <mut v:LetArgsList> "," <a:LetArg> => { v.push(a); v },
+    <a:LetArg> => vec![a],
+};
+
+LetArg: LetArg = {
+    <name:Identifier>                                       => LetArg { name, typ: None,       default: None },
+    <name:Identifier> <t:Type>                              => LetArg { name, typ: Some(t),    default: None },
+    <name:Identifier>           ":=" <v:Expression>         => LetArg { name, typ: None,       default: Some(Box::new(v)) },
+    <name:Identifier> <t:Type>  ":=" <v:Expression>         => LetArg { name, typ: Some(t),    default: Some(Box::new(v)) },
+};
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+Type: Type = {
+    <name:Identifier>                         => Type::Simple(name),
+    <name:Identifier> "{" <a:TypeList>   "}"  => Type::SubTypes   { name, args: a },
+    <name:Identifier> "{" <a:TypeArgList> "}" => Type::Parameter  { name, args: a },
+};
+
+TypeList: Vec<Type> = {
+    <mut v:TypeList> "," <t:Type> => { v.push(t); v },
+    <t:Type>                      => vec![t],
+};
+
+TypeArgList: Vec<TypeArg> = {
+    <mut v:TypeArgList> "," <a:TypeArg> => { v.push(a); v },
+    <a:TypeArg>                         => vec![a],
+};
+
+TypeArg: TypeArg = {
+    <v:Iconst>                      => TypeArg { name: None,       value: v },
+    <n:Identifier> ":=" <v:Iconst>  => TypeArg { name: Some(n),   value: v },
+};
+
+Iconst: String = {
+    <s:"integer"> => s.to_string(),
+};
+
+// ---------------------------------------------------------------------------
+// Expressions — precedence tiers (lowest → highest)
+// ---------------------------------------------------------------------------
+
+Expression: Ast = OrExpr;
+
+// OR  (left-associative)
+OrExpr: Ast = {
+    <l:OrExpr> "||" <r:AndExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Or,  left: Box::new(l), right: Box::new(r) },
+    AndExpr,
+};
+
+// AND (left-associative)
+AndExpr: Ast = {
+    <l:AndExpr> "&&" <r:NotExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::And, left: Box::new(l), right: Box::new(r) },
+    NotExpr,
+};
+
+// NOT (right-associative prefix)
+NotExpr: Ast = {
+    "!" <v:NotExpr> => Ast::UnaryExpr { op: UnaryOp::Not, value: Box::new(v) },
+    CmpExpr,
+};
+
+// Comparison (non-associative)
+CmpExpr: Ast = {
+    <l:AddExpr> "="  <r:AddExpr> => Ast::BinaryExpr { op: BinaryOp::Equals,        left: Box::new(l), right: Box::new(r) },
+    <l:AddExpr> "<"  <r:AddExpr> => Ast::BinaryExpr { op: BinaryOp::Less,          left: Box::new(l), right: Box::new(r) },
+    <l:AddExpr> ">"  <r:AddExpr> => Ast::BinaryExpr { op: BinaryOp::Greater,       left: Box::new(l), right: Box::new(r) },
+    <l:AddExpr> "<=" <r:AddExpr> => Ast::BinaryExpr { op: BinaryOp::LessOrEqual,   left: Box::new(l), right: Box::new(r) },
+    <l:AddExpr> ">=" <r:AddExpr> => Ast::BinaryExpr { op: BinaryOp::GreaterOrEqual,left: Box::new(l), right: Box::new(r) },
+    <l:AddExpr> "<>" <r:AddExpr> => Ast::BinaryExpr { op: BinaryOp::NotEquals,     left: Box::new(l), right: Box::new(r) },
+    AddExpr,
+};
+
+// Addition / subtraction (left-associative)
+AddExpr: Ast = {
+    <l:AddExpr> "+" <r:MulExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Plus,  left: Box::new(l), right: Box::new(r) },
+    <l:AddExpr> "-" <r:MulExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Minus, left: Box::new(l), right: Box::new(r) },
+    MulExpr,
+};
+
+// Multiplication / division / modulo (left-associative)
+MulExpr: Ast = {
+    <l:MulExpr> "*" <r:PowExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Mul, left: Box::new(l), right: Box::new(r) },
+    <l:MulExpr> "/" <r:PowExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Div, left: Box::new(l), right: Box::new(r) },
+    <l:MulExpr> "%" <r:PowExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Mod, left: Box::new(l), right: Box::new(r) },
+    PowExpr,
+};
+
+// Power (left-associative, higher than */%)
+PowExpr: Ast = {
+    <l:PowExpr> "^" <r:UnaryExpr> =>
+        Ast::BinaryExpr { op: BinaryOp::Pow, left: Box::new(l), right: Box::new(r) },
+    UnaryExpr,
+};
+
+// Unary +/- (right-associative, higher than ^)
+UnaryExpr: Ast = {
+    "+" <v:PostfixExpr> => Ast::UnaryExpr { op: UnaryOp::Plus,  value: Box::new(v) },
+    "-" <v:PostfixExpr> => Ast::UnaryExpr { op: UnaryOp::Minus, value: Box::new(v) },
+    PostfixExpr,
+};
+
+// Postfix: member access (.), type cast (::), function call (())
+// All left-associative and highest-precedence.
+PostfixExpr: Ast = {
+    <base:PostfixExpr> "::" <t:Type> =>
+        Ast::Cast { value: Box::new(base), typ: Box::new(t) },
+    <base:PostfixExpr> "." <part:Identifier> =>
+        Ast::Access { base: Box::new(base), part },
+    <func:PostfixExpr> "(" ")" =>
+        Ast::Call { func: Box::new(func), args: vec![] },
+    <func:PostfixExpr> "(" <args:FuncArgs> ")" =>
+        Ast::Call { func: Box::new(func), args },
+    PrimaryExpr,
+};
+
+PrimaryExpr: Ast = {
+    <id:Identifier>    => Ast::Identifier(id),
+    <c:AexprConst>     => c,
+    "(" <e:Expression> ")" => e,
+};
+
+// ---------------------------------------------------------------------------
+// Literals
+// ---------------------------------------------------------------------------
+
+AexprConst: Ast = {
+    <s:"integer"> => Ast::Literal(Literal::Integer(s.to_string())),
+    <s:"float">   => Ast::Literal(Literal::Float(s.to_string())),
+    <s:"string">  => Ast::Literal(Literal::String(decode_string(s))),
+    "true"        => Ast::Literal(Literal::True),
+    "false"       => Ast::Literal(Literal::False),
+    "null"        => Ast::Literal(Literal::Null),
+};
+
+// ---------------------------------------------------------------------------
+// Identifiers (unquoted or quoted; keywords usable as identifiers where safe)
+// ---------------------------------------------------------------------------
+
+Identifier: String = {
+    <s:"ident"> => {
+        // Quoted identifiers arrive with surrounding `"` characters
+        if s.starts_with('"') { decode_quoted_ident(s) } else { normalize_ident(s) }
+    },
+    // Soft keywords — may be used as identifiers
+    "table" => "table".to_string(),
+};
+
+// ---------------------------------------------------------------------------
+// Function arguments
+// ---------------------------------------------------------------------------
+
+FuncArgs: Vec<FuncArg> = {
+    <mut v:FuncArgs> "," <a:FuncArg> => { v.push(a); v },
+    <a:FuncArg>                      => vec![a],
+};
+
+FuncArg: FuncArg = {
+    // named scalar:  name := expr
+    <name:Identifier> ":=" <value:Expression> =>
+        FuncArg::Flat { name: Some(name), value: Box::new(value) },
+    // named list:    name := { ... }
+    <name:Identifier> ":=" "{" <items:FuncArgList> "}" =>
+        FuncArg::List { name: Some(name), items },
+    // positional scalar
+    <value:Expression> =>
+        FuncArg::Flat { name: None, value: Box::new(value) },
+    // positional list
+    "{" <items:FuncArgList> "}" =>
+        FuncArg::List { name: None, items },
+};
+
+FuncArgList: Vec<FuncArgNamed> = {
+    FuncArgListNe,
+    => vec![],
+};
+
+FuncArgListNe: Vec<FuncArgNamed> = {
+    <mut v:FuncArgListNe> "," <a:FuncArgNamed> => { v.push(a); v },
+    <a:FuncArgNamed>                           => vec![a],
+};
+
+FuncArgNamed: FuncArgNamed = {
+    // key => value  (case mapping)
+    <key:Expression> "=>" <value:Expression> =>
+        FuncArgNamed::Case { key: Box::new(key), value: Box::new(value) },
+    // name := expr
+    <name:Identifier> ":=" <value:Expression> =>
+        FuncArgNamed::Flat { name: Some(name), value: Box::new(value) },
+    // name := { ... }
+    <name:Identifier> ":=" "{" <items:FuncArgList> "}" =>
+        FuncArgNamed::List { name: Some(name), items },
+    // positional scalar
+    <value:Expression> =>
+        FuncArgNamed::Flat { name: None, value: Box::new(value) },
+    // positional list
+    "{" <items:FuncArgList> "}" =>
+        FuncArgNamed::List { name: None, items },
+};

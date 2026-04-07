@@ -1,0 +1,21 @@
+[package]
+name = "saneql"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "saneql"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lalrpop-util = { version = "0.22", features = ["lexer"] }
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[features]
+wasm = ["wasm-bindgen", "js-sys"]
+
+[build-dependencies]
+lalrpop = "0.22"
+
+[dev-dependencies]
