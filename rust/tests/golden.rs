@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 mod tpch;
 
+extern crate pollster;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -93,7 +95,7 @@ fn sql_output_matches_oracle() {
         let src = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
 
-        let actual_sql = match saneql::compile_with_schema(&src, tpch::tpch_schema()) {
+        let actual_sql = match pollster::block_on(saneql::compile_with_schema(&src, tpch::tpch_schema())) {
             Ok(s) => s,
             Err(e) => {
                 failures.push(format!("{}: compile error: {e}", path.display()));

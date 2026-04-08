@@ -3,6 +3,8 @@
 /// Each test calls `compile_with_schema` with an inline schema callback and
 /// asserts the exact SQL string produced.
 
+extern crate pollster;
+
 fn schema(tables: &'static [(&'static str, &'static [(&'static str, &'static str)])])
     -> impl Fn(&str) -> Option<Vec<(String, String)>>
 {
@@ -14,7 +16,7 @@ fn schema(tables: &'static [(&'static str, &'static [(&'static str, &'static str
 }
 
 fn compile(query: &str, tables: &'static [(&'static str, &'static [(&'static str, &'static str)])]) -> String {
-    saneql::compile_with_schema(query, schema(tables))
+    pollster::block_on(saneql::compile_with_schema(query, schema(tables)))
         .unwrap_or_else(|e| panic!("compile error: {e}"))
 }
 

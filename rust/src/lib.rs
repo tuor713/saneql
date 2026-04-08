@@ -7,16 +7,18 @@ pub mod wasm;
 
 pub use parser::parse;
 
+use std::future::Future;
+use std::pin::Pin;
 use infra::schema::{Column, SchemaProvider, Table, parse_type_str};
 use semana::SemanticAnalysis;
 use algebra::Op;
 use sql::SqlWriter;
 
 /// Internal: compile a parsed query using any [`SchemaProvider`].
-pub(crate) fn compile_inner(input: &str, schema: Box<dyn SchemaProvider>) -> Result<String, String> {
+pub(crate) async fn compile_inner(input: &str, schema: Box<dyn SchemaProvider>) -> Result<String, String> {
     let ast = parser::parse(input)?;
     let mut semana = SemanticAnalysis::with_provider(schema);
-    let result = semana.analyze_query(&ast)?;
+    let result = semana.analyze_query(&ast).await?;
 
     // Scalar result: emit as `select EXPR`
     if result.is_scalar() {
@@ -81,24 +83,26 @@ pub(crate) fn compile_inner(input: &str, schema: Box<dyn SchemaProvider>) -> Res
 /// the query.  It should return a list of `(column_name, type_string)` pairs,
 /// or `None` if the table does not exist.  `table_name` is the name exactly
 /// as written in the query (e.g. `"catalog.schema.orders"`).
-pub fn compile_with_schema<F>(input: &str, get_columns: F) -> Result<String, String>
+pub async fn compile_with_schema<F>(input: &str, get_columns: F) -> Result<String, String>
 where
     F: Fn(&str) -> Option<Vec<(String, String)>> + 'static,
 {
     struct CallbackProvider<F>(F);
-    impl<F: Fn(&str) -> Option<Vec<(String, String)>>> SchemaProvider for CallbackProvider<F> {
-        fn lookup_table(&self, name: &str) -> Option<Table> {
-            let cols = (self.0)(name)?;
-            let columns = cols
-                .into_iter()
-                .map(|(col_name, type_str)| {
-                    let typ = parse_type_str(&type_str).unwrap_or_else(infra::schema::Type::unknown);
-                    Column { name: col_name, typ }
-                })
-                .collect();
-            Some(Table { columns })
+    impl<F: Fn(&str) -> Option<Vec<(String, String)>> + 'static> SchemaProvider for CallbackProvider<F> {
+        fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>> {
+            Box::pin(async move {
+                let cols = (self.0)(name)?;
+                let columns = cols
+                    .into_iter()
+                    .map(|(col_name, type_str)| {
+                        let typ = parse_type_str(&type_str).unwrap_or_else(infra::schema::Type::unknown);
+                        Column { name: col_name, typ }
+                    })
+                    .collect();
+                Some(Table { columns })
+            })
         }
     }
 
-    compile_inner(input, Box::new(CallbackProvider(get_columns)))
+    compile_inner(input, Box::new(CallbackProvider(get_columns))).await
 }

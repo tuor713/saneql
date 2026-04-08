@@ -117,11 +117,7 @@ impl Clone for BindingInfo {
     }
 }
 
-// ── BindingInfo: static root ──────────────────────────────────────────────────
-
-thread_local! {
-    static ROOT_BINDING: BindingInfo = BindingInfo::new_empty();
-}
+// ── BindingInfo ───────────────────────────────────────────────────────────────
 
 impl BindingInfo {
     fn new_empty() -> Self {
@@ -138,11 +134,6 @@ impl BindingInfo {
 
     pub fn new() -> Self {
         Self::new_empty()
-    }
-
-    /// Run `f` with a reference to the root (empty) binding scope.
-    pub fn with_root_scope<R>(f: impl FnOnce(&BindingInfo) -> R) -> R {
-        ROOT_BINDING.with(f)
     }
 
     /// SAFETY: `parent` must outlive `self` and must not be moved afterwards.
@@ -407,6 +398,9 @@ struct LetInfo {
 
 pub struct SemanticAnalysis {
     schema: Box<dyn SchemaProvider>,
+    /// Empty root binding scope, shared via Rc so it can be cloned to avoid
+    /// borrow conflicts when also borrowing `self` mutably.
+    root_binding: Rc<BindingInfo>,
     lets: Vec<LetInfo>,
     let_lookup: HashMap<String, usize>,
     let_scope_limit: usize,
@@ -422,12 +416,18 @@ impl SemanticAnalysis {
     pub fn with_provider(schema: Box<dyn SchemaProvider>) -> Self {
         SemanticAnalysis {
             schema,
+            root_binding: Rc::new(BindingInfo::new()),
             lets: Vec::new(),
             let_lookup: HashMap::new(),
             let_scope_limit: usize::MAX,
             next_symbol_id: 1,
             next_iu_id: 1,
         }
+    }
+
+    /// Clone the root (empty) binding scope for use as a parent reference.
+    fn root_scope(&self) -> Rc<BindingInfo> {
+        Rc::clone(&self.root_binding)
     }
 
     fn new_iu(&mut self, typ: Type) -> Rc<IU> {
@@ -441,7 +441,7 @@ impl SemanticAnalysis {
     /// `parts` are the individual name components, e.g.
     /// `["kafka", "default", "my.topic.name"]`.  They are joined with `.`
     /// to form the schema-lookup key passed to the [`SchemaProvider`] callback.
-    fn make_table_scan(
+    async fn make_table_scan(
         &mut self,
         scope: &BindingInfo,
         parts: Vec<String>,
@@ -450,6 +450,7 @@ impl SemanticAnalysis {
         let table = self
             .schema
             .lookup_table(&lookup_key)
+            .await
             .ok_or_else(|| format!("unknown table '{lookup_key}'"))?;
         let table_cols: Vec<_> = table
             .columns
@@ -481,7 +482,7 @@ impl SemanticAnalysis {
 
     // ── top-level entry ───────────────────────────────────────────────────
 
-    pub fn analyze_query(&mut self, ast: &Ast) -> Result<ExpressionResult, String> {
+    pub async fn analyze_query(&mut self, ast: &Ast) -> Result<ExpressionResult, String> {
         let qb = match ast {
             Ast::QueryBody { lets, body } => (lets, body),
             Ast::DefineFunction { .. } => return Err("defun not implemented yet".into()),
@@ -491,7 +492,8 @@ impl SemanticAnalysis {
             self.analyze_let(le)?;
         }
         let body = qb.1.clone();
-        BindingInfo::with_root_scope(|root| self.analyze_expression(root, &body))
+        let root = self.root_scope();
+        self.analyze_expression(&root, &body).await
     }
 
     // ── let-binding registration ──────────────────────────────────────────
@@ -538,22 +540,24 @@ impl SemanticAnalysis {
 
     // ── expression dispatch ───────────────────────────────────────────────
 
-    fn analyze_expression(
-        &mut self,
-        scope: &BindingInfo,
-        ast: &Ast,
-    ) -> Result<ExpressionResult, String> {
-        match ast {
-            Ast::Identifier(_) => self.analyze_token(scope, ast),
-            Ast::Literal(lit) => self.analyze_literal(lit),
-            Ast::Cast { value, typ } => self.analyze_cast(scope, value, typ),
-            Ast::BinaryExpr { op, left, right } => self.analyze_binary(scope, op, left, right),
-            Ast::UnaryExpr { op, value } => self.analyze_unary(scope, op, value),
-            Ast::Access { base, part } => self.analyze_access(scope, base, part),
-            Ast::Call { func, args } => self.analyze_call(scope, func, args),
-            Ast::QueryBody { .. } => Err("unexpected QueryBody in expression position".into()),
-            Ast::DefineFunction { .. } => Err("unexpected DefineFunction".into()),
-        }
+    fn analyze_expression<'a>(
+        &'a mut self,
+        scope: &'a BindingInfo,
+        ast: &'a Ast,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ExpressionResult, String>> + 'a>> {
+        Box::pin(async move {
+            match ast {
+                Ast::Identifier(_) => self.analyze_token(scope, ast).await,
+                Ast::Literal(lit) => self.analyze_literal(lit),
+                Ast::Cast { value, typ } => self.analyze_cast(scope, value, typ).await,
+                Ast::BinaryExpr { op, left, right } => self.analyze_binary(scope, op, left, right).await,
+                Ast::UnaryExpr { op, value } => self.analyze_unary(scope, op, value).await,
+                Ast::Access { base, part } => self.analyze_access(scope, base, part).await,
+                Ast::Call { func, args } => self.analyze_call(scope, func, args).await,
+                Ast::QueryBody { .. } => Err("unexpected QueryBody in expression position".into()),
+                Ast::DefineFunction { .. } => Err("unexpected DefineFunction".into()),
+            }
+        })
     }
 
     // ── literals ──────────────────────────────────────────────────────────
@@ -590,7 +594,7 @@ impl SemanticAnalysis {
 
     // ── identifier / table-scan / let-call without args ───────────────────
 
-    fn analyze_token(
+    async fn analyze_token(
         &mut self,
         scope: &BindingInfo,
         ast: &Ast,
@@ -619,7 +623,7 @@ impl SemanticAnalysis {
                     None => scope as *const BindingInfo,
                 };
                 let eval_scope_ref = unsafe { &*eval_scope };
-                let mut res = self.analyze_expression(eval_scope_ref, &node)?;
+                let mut res = self.analyze_expression(eval_scope_ref, &node).await?;
                 if res.is_table() {
                     unsafe {
                         res.binding_mut().set_parent(scope);
@@ -639,14 +643,15 @@ impl SemanticAnalysis {
                 let body = self.lets[idx].body.clone();
                 let old_limit = self.let_scope_limit;
                 self.let_scope_limit = idx;
-                let res = BindingInfo::with_root_scope(|root| self.analyze_expression(root, &body));
+                let root = self.root_scope();
+                let res = self.analyze_expression(&root, &body).await;
                 self.let_scope_limit = old_limit;
                 return res;
             }
         }
 
         // Table scan?  A simple identifier is a single-part name.
-        self.make_table_scan(scope, vec![name])
+        self.make_table_scan(scope, vec![name]).await
     }
 
     // ── member access: base.part ──────────────────────────────────────────
@@ -668,7 +673,7 @@ impl SemanticAnalysis {
         }
     }
 
-    fn analyze_access(
+    async fn analyze_access(
         &mut self,
         scope: &BindingInfo,
         base_ast: &Ast,
@@ -692,10 +697,9 @@ impl SemanticAnalysis {
         if let Some(mut parts) = Self::extract_dotted_parts(base_ast) {
             parts.push(col_name.clone());
             let lookup_key = parts.join(".");
-            if self.schema.lookup_table(&lookup_key).is_some() {
-                return BindingInfo::with_root_scope(|root| {
-                    self.make_table_scan(root, parts)
-                });
+            if self.schema.lookup_table(&lookup_key).await.is_some() {
+                let root = self.root_scope();
+                return self.make_table_scan(&root, parts).await;
             }
         }
 
@@ -704,15 +708,15 @@ impl SemanticAnalysis {
 
     // ── binary expressions ────────────────────────────────────────────────
 
-    fn analyze_binary(
+    async fn analyze_binary(
         &mut self,
         scope: &BindingInfo,
         op: &BinaryOp,
         left_ast: &Ast,
         right_ast: &Ast,
     ) -> Result<ExpressionResult, String> {
-        let mut left = self.analyze_expression(scope, left_ast)?;
-        let mut right = self.analyze_expression(scope, right_ast)?;
+        let mut left = self.analyze_expression(scope, left_ast).await?;
+        let mut right = self.analyze_expression(scope, right_ast).await?;
 
         let arithmetic = |l: &mut ExpressionResult,
                           r: &mut ExpressionResult,
@@ -862,13 +866,13 @@ impl SemanticAnalysis {
 
     // ── unary expressions ─────────────────────────────────────────────────
 
-    fn analyze_unary(
+    async fn analyze_unary(
         &mut self,
         scope: &BindingInfo,
         op: &UnaryOp,
         value_ast: &Ast,
     ) -> Result<ExpressionResult, String> {
-        let mut val = self.analyze_expression(scope, value_ast)?;
+        let mut val = self.analyze_expression(scope, value_ast).await?;
         if !val.is_scalar() {
             return Err("scalar value required in unary operator".into());
         }
@@ -906,13 +910,13 @@ impl SemanticAnalysis {
 
     // ── cast ──────────────────────────────────────────────────────────────
 
-    fn analyze_cast(
+    async fn analyze_cast(
         &mut self,
         scope: &BindingInfo,
         value_ast: &Ast,
         type_ast: &crate::parser::ast::Type,
     ) -> Result<ExpressionResult, String> {
-        let mut val = self.analyze_expression(scope, value_ast)?;
+        let mut val = self.analyze_expression(scope, value_ast).await?;
         if !val.is_scalar() {
             return Err("casts require scalar values".into());
         }
@@ -930,7 +934,7 @@ impl SemanticAnalysis {
 
     // ── function call dispatch ────────────────────────────────────────────
 
-    fn analyze_call(
+    async fn analyze_call(
         &mut self,
         scope: &BindingInfo,
         func_ast: &Ast,
@@ -939,7 +943,7 @@ impl SemanticAnalysis {
         // Determine if this is a method call (base.method) or free call (name)
         let (base_result, func_name) = match func_ast {
             Ast::Access { base, part } => {
-                let b = self.analyze_expression(scope, base)?;
+                let b = self.analyze_expression(scope, base).await?;
                 (Some(b), part.clone())
             }
             Ast::Identifier(n) => (None, n.clone()),
@@ -954,10 +958,10 @@ impl SemanticAnalysis {
 
         // Dispatch
         if let Some(idx) = let_idx {
-            return self.call_let(scope, idx, &sig, bound);
+            return self.call_let(scope, idx, &sig, bound).await;
         }
 
-        self.call_builtin(scope, &func_name, base_result, &sig, bound)
+        self.call_builtin(scope, &func_name, base_result, &sig, bound).await
     }
 
     fn resolve_signature(
@@ -997,7 +1001,7 @@ impl SemanticAnalysis {
 
     // ── let-binding call ──────────────────────────────────────────────────
 
-    fn call_let(
+    async fn call_let(
         &mut self,
         outer_scope: &BindingInfo,
         idx: usize,
@@ -1031,7 +1035,7 @@ impl SemanticAnalysis {
         let body = self.lets[idx].body.clone();
         let old_limit = self.let_scope_limit;
         self.let_scope_limit = idx;
-        let mut res = self.analyze_expression(&call_scope, &body)?;
+        let mut res = self.analyze_expression(&call_scope, &body).await?;
         self.let_scope_limit = old_limit;
         if res.is_table() {
             res.binding_mut().parent_scope = None;
@@ -1041,7 +1045,7 @@ impl SemanticAnalysis {
 
     // ── built-in call dispatch ────────────────────────────────────────────
 
-    fn call_builtin(
+    async fn call_builtin(
         &mut self,
         scope: &BindingInfo,
         name: &str,
@@ -1049,23 +1053,6 @@ impl SemanticAnalysis {
         sig: &Signature,
         bound: Vec<Option<Box<Ast>>>,
     ) -> Result<ExpressionResult, String> {
-        // Helper: evaluate a scalar argument in scope
-        let eval_scalar = |semana: &mut Self,
-                           scope: &BindingInfo,
-                           arg_name: &str,
-                           ast_opt: &Option<Box<Ast>>|
-         -> Result<ExpressionResult, String> {
-            let ast = ast_opt
-                .as_ref()
-                .ok_or_else(|| format!("parameter '{arg_name}' missing in call to '{name}'"))?;
-            let r = semana.analyze_expression(scope, ast)?;
-            if !r.is_scalar() {
-                return Err(format!(
-                    "parameter '{arg_name}' requires a scalar in call to '{name}'"
-                ));
-            }
-            Ok(r)
-        };
 
 
         let eval_symbol = |semana: &mut Self,
@@ -1100,7 +1087,7 @@ impl SemanticAnalysis {
                 } else {
                     return Err("'is' requires scalar".into());
                 };
-                let mut arg = eval_scalar(self, scope, &sig.args[0].name, &bound[0])?;
+                let mut arg = self.eval_scalar_arg(scope, &sig.args[0].name, name, &bound[0]).await?;
                 enforce_comparable_exprs(b_scalar.expr_mut(), arg.expr_mut())?;
                 let le = take_expr(&mut b_scalar);
                 let re = take_expr(&mut arg);
@@ -1120,7 +1107,7 @@ impl SemanticAnalysis {
                 } else {
                     return Err("'like' requires a scalar base".into());
                 };
-                let mut arg = eval_scalar(self, scope, &sig.args[0].name, &bound[0])?;
+                let mut arg = self.eval_scalar_arg(scope, &sig.args[0].name, name, &bound[0]).await?;
                 if !b_s.expr_mut().typ().is_string() || !arg.expr_mut().typ().is_string() {
                     return Err("'like' requires string arguments".into());
                 }
@@ -1142,8 +1129,8 @@ impl SemanticAnalysis {
                 } else {
                     return Err("'between' requires a scalar base".into());
                 };
-                let mut lower = eval_scalar(self, scope, &sig.args[0].name, &bound[0])?;
-                let mut upper = eval_scalar(self, scope, &sig.args[1].name, &bound[1])?;
+                let mut lower = self.eval_scalar_arg(scope, &sig.args[0].name, name, &bound[0]).await?;
+                let mut upper = self.eval_scalar_arg(scope, &sig.args[1].name, name, &bound[1]).await?;
                 enforce_comparable_exprs(b_s.expr_mut(), lower.expr_mut())?;
                 enforce_comparable_exprs(b_s.expr_mut(), upper.expr_mut())?;
                 let base_e = take_expr(&mut b_s);
@@ -1166,7 +1153,7 @@ impl SemanticAnalysis {
                     return Err("'in' requires a scalar base".into());
                 };
                 let values_ast = bound[0].as_ref().ok_or("'in' missing values")?;
-                let mut values = self.eval_scalar_list(scope, values_ast)?;
+                let mut values = self.eval_scalar_list(scope, values_ast).await?;
                 if values.is_empty() {
                     return Ok(ExpressionResult::scalar(Box::new(Expr::Const {
                         value: Some("false".into()),
@@ -1195,7 +1182,7 @@ impl SemanticAnalysis {
                     return Err("'substr' requires scalar".into());
                 };
                 let from = if let Some(a) = &bound[0] {
-                    let mut r = self.analyze_expression(scope, a)?;
+                    let mut r = self.analyze_expression(scope, a).await?;
                     if !r.is_scalar() || !r.expr_mut().typ().is_numeric() {
                         return Err("'substr' requires numeric arguments".into());
                     }
@@ -1204,7 +1191,7 @@ impl SemanticAnalysis {
                     None
                 };
                 let len = if let Some(a) = &bound[1] {
-                    let mut r = self.analyze_expression(scope, a)?;
+                    let mut r = self.analyze_expression(scope, a).await?;
                     if !r.is_scalar() || !r.expr_mut().typ().is_numeric() {
                         return Err("'substr' requires numeric arguments".into());
                     }
@@ -1254,7 +1241,7 @@ impl SemanticAnalysis {
                     return Err("'filter' requires a table base".into());
                 };
                 let cond_ast = bound[0].as_ref().ok_or("'filter' missing condition")?;
-                let mut cond = self.analyze_expression(&binding, cond_ast)?;
+                let mut cond = self.analyze_expression(&binding, cond_ast).await?;
                 if cond.expr_mut().typ().base != TypeBase::Bool {
                     return Err("'filter' requires a boolean filter condition".into());
                 }
@@ -1271,19 +1258,19 @@ impl SemanticAnalysis {
             // ── join ──────────────────────────────────────────────────────
             "join" => {
                 let b = base.unwrap();
-                return self.analyze_join(scope, b, sig, &bound);
+                return self.analyze_join(scope, b, sig, &bound).await;
             }
 
             // ── groupby ───────────────────────────────────────────────────
             "groupby" => {
                 let b = base.unwrap();
-                return self.analyze_groupby(b, &bound);
+                return self.analyze_groupby(b, &bound).await;
             }
 
             // ── aggregate ─────────────────────────────────────────────────
             "aggregate" => {
                 let b = base.unwrap();
-                return self.analyze_aggregate(b, &bound);
+                return self.analyze_aggregate(b, &bound).await;
             }
 
             // ── distinct ──────────────────────────────────────────────────
@@ -1295,33 +1282,33 @@ impl SemanticAnalysis {
             // ── set operations ────────────────────────────────────────────
             "union" | "except" | "intersect" => {
                 let b = base.unwrap();
-                return self.analyze_set_op(scope, name, b, &bound);
+                return self.analyze_set_op(scope, name, b, &bound).await;
             }
 
             // ── window ────────────────────────────────────────────────────
             "window" => {
                 let b = base.unwrap();
-                return self.analyze_window(b, &bound);
+                return self.analyze_window(b, &bound).await;
             }
 
             // ── orderby ───────────────────────────────────────────────────
             "orderby" => {
                 let b = base.unwrap();
-                return self.analyze_orderby(b, &bound);
+                return self.analyze_orderby(b, &bound).await;
             }
 
             // ── map / project / projectout ────────────────────────────────
             "map" => {
                 let b = base.unwrap();
-                return self.analyze_map(b, &bound, false);
+                return self.analyze_map(b, &bound, false).await;
             }
             "project" => {
                 let b = base.unwrap();
-                return self.analyze_map(b, &bound, true);
+                return self.analyze_map(b, &bound, true).await;
             }
             "projectout" => {
                 let b = base.unwrap();
-                return self.analyze_projectout(b, &bound);
+                return self.analyze_projectout(b, &bound).await;
             }
 
             // ── as / alias ────────────────────────────────────────────────
@@ -1360,24 +1347,24 @@ impl SemanticAnalysis {
 
             // ── aggregate functions (count / sum / avg / min / max) ────────
             "count" | "sum" | "avg" | "min" | "max" => {
-                return self.handle_aggregate(scope, name, sig, &bound);
+                return self.handle_aggregate(scope, name, sig, &bound).await;
             }
 
             // ── window functions ──────────────────────────────────────────
             "row_number" | "rank" | "dense_rank" | "ntile" | "lead" | "lag" | "first_value"
             | "last_value" => {
-                return self.handle_window(scope, name, sig, &bound);
+                return self.handle_window(scope, name, sig, &bound).await;
             }
 
             // ── table construction ────────────────────────────────────────
             "table" => {
                 let arg = bound[0].as_ref().ok_or("'table' missing values")?;
-                return self.analyze_table_construction(scope, arg);
+                return self.analyze_table_construction(scope, arg).await;
             }
 
             // ── case ──────────────────────────────────────────────────────
             "case" => {
-                return self.analyze_case(scope, &bound);
+                return self.analyze_case(scope, &bound).await;
             }
 
             // ── gensym ────────────────────────────────────────────────────
@@ -1402,7 +1389,7 @@ impl SemanticAnalysis {
 
             // ── foreigncall ───────────────────────────────────────────────
             "foreigncall" => {
-                return self.analyze_foreign_call(scope, sig, &bound);
+                return self.analyze_foreign_call(scope, sig, &bound).await;
             }
 
             _ => return Err(format!("builtin '{name}' not implemented")),
@@ -1411,7 +1398,7 @@ impl SemanticAnalysis {
 
     // ── join ──────────────────────────────────────────────────────────────
 
-    fn analyze_join(
+    async fn analyze_join(
         &mut self,
         outer_scope: &BindingInfo,
         input: ExpressionResult,
@@ -1455,7 +1442,7 @@ impl SemanticAnalysis {
 
         // Analyze the right table
         let table_ast = bound[0].as_ref().ok_or("'join' missing table argument")?;
-        let other = self.analyze_expression(outer_scope, table_ast)?;
+        let other = self.analyze_expression(outer_scope, table_ast).await?;
         if !other.is_table() {
             return Err("join 'table' argument must be a table".into());
         }
@@ -1472,7 +1459,7 @@ impl SemanticAnalysis {
 
         // Evaluate join condition in the merged binding
         let cond_ast = bound[1].as_ref().ok_or("'join' missing condition")?;
-        let mut cond = self.analyze_expression(&merged, cond_ast)?;
+        let mut cond = self.analyze_expression(&merged, cond_ast).await?;
         if !cond.is_scalar() || cond.expr_mut().typ().base != TypeBase::Bool {
             return Err("join condition must be a boolean".into());
         }
@@ -1500,7 +1487,7 @@ impl SemanticAnalysis {
 
     // ── groupby ───────────────────────────────────────────────────────────
 
-    fn analyze_groupby(
+    async fn analyze_groupby(
         &mut self,
         input: ExpressionResult,
         bound: &[Option<Box<Ast>>],
@@ -1515,7 +1502,7 @@ impl SemanticAnalysis {
 
         // Groups
         if let Some(g_ast) = &bound[0] {
-            let groups = self.eval_expr_list(&input_binding, g_ast)?;
+            let groups = self.eval_expr_list(&input_binding, g_ast).await?;
             for (col_name, mut er) in groups {
                 if !er.is_scalar() {
                     return Err("groupby requires scalar groups".into());
@@ -1554,7 +1541,7 @@ impl SemanticAnalysis {
         // aggregate IUs already pushed into `aggregations` by `handle_aggregate`.
         let mut agg_results: Vec<(String, Box<Expr>)> = Vec::new();
         if let Some(a_ast) = &bound[1] {
-            let agg_list = self.eval_expr_list(&result_binding, a_ast)?;
+            let agg_list = self.eval_expr_list(&result_binding, a_ast).await?;
             for (col_name, mut er) in agg_list {
                 if !er.is_scalar() {
                     return Err("groupby requires scalar aggregates".into());
@@ -1611,7 +1598,7 @@ impl SemanticAnalysis {
 
     // ── aggregate (scalar) ────────────────────────────────────────────────
 
-    fn analyze_aggregate(
+    async fn analyze_aggregate(
         &mut self,
         input: ExpressionResult,
         bound: &[Option<Box<Ast>>],
@@ -1629,7 +1616,7 @@ impl SemanticAnalysis {
         result_binding.gbs = Some(Rc::clone(&gbs_rc));
 
         let agg_ast = bound[0].as_ref().ok_or("'aggregate' missing argument")?;
-        let agg_list = self.eval_expr_list(&result_binding, agg_ast)?;
+        let agg_list = self.eval_expr_list(&result_binding, agg_ast).await?;
         let (_, mut result_er) = agg_list
             .into_iter()
             .next()
@@ -1676,7 +1663,7 @@ impl SemanticAnalysis {
 
     // ── set operations ────────────────────────────────────────────────────
 
-    fn analyze_set_op(
+    async fn analyze_set_op(
         &mut self,
         outer_scope: &BindingInfo,
         name: &str,
@@ -1710,7 +1697,7 @@ impl SemanticAnalysis {
         let other_ast = bound[0]
             .as_ref()
             .ok_or_else(|| format!("'{name}' missing table argument"))?;
-        let other = self.analyze_expression(outer_scope, other_ast)?;
+        let other = self.analyze_expression(outer_scope, other_ast).await?;
         if !other.is_table() {
             return Err(format!("'{name}' table argument must be a table"));
         }
@@ -1765,7 +1752,7 @@ impl SemanticAnalysis {
 
     // ── window ────────────────────────────────────────────────────────────
 
-    fn analyze_window(
+    async fn analyze_window(
         &mut self,
         input: ExpressionResult,
         bound: &[Option<Box<Ast>>],
@@ -1791,7 +1778,7 @@ impl SemanticAnalysis {
         // Evaluate window expressions; these are IURefs to the window aggregate IUs.
         let mut col_names: Vec<String> = Vec::new();
         if let Some(expr_ast) = &bound[0] {
-            let exprs = self.eval_expr_list(&result_binding, expr_ast)?;
+            let exprs = self.eval_expr_list(&result_binding, expr_ast).await?;
             for (col_name, mut er) in exprs {
                 if !er.is_scalar() {
                     return Err("window requires scalar aggregates".into());
@@ -1816,7 +1803,7 @@ impl SemanticAnalysis {
         // Partition-by
         let mut partition_by = Vec::new();
         if let Some(pb_ast) = &bound[1] {
-            let exprs = self.eval_expr_list(&input_binding, pb_ast)?;
+            let exprs = self.eval_expr_list(&input_binding, pb_ast).await?;
             for (_, mut er) in exprs {
                 if !er.is_scalar() {
                     return Err("partitionby requires scalar values".into());
@@ -1828,7 +1815,7 @@ impl SemanticAnalysis {
         // Order-by
         let mut order_by = Vec::new();
         if let Some(ob_ast) = &bound[2] {
-            let exprs = self.eval_expr_list(&input_binding, ob_ast)?;
+            let exprs = self.eval_expr_list(&input_binding, ob_ast).await?;
             for (_, er) in exprs {
                 if !er.is_scalar() {
                     return Err("orderby requires scalar values".into());
@@ -1855,7 +1842,7 @@ impl SemanticAnalysis {
 
     // ── orderby ───────────────────────────────────────────────────────────
 
-    fn analyze_orderby(
+    async fn analyze_orderby(
         &mut self,
         input: ExpressionResult,
         bound: &[Option<Box<Ast>>],
@@ -1864,7 +1851,7 @@ impl SemanticAnalysis {
 
         let mut order = Vec::new();
         if let Some(exprs_ast) = &bound[0] {
-            let exprs = self.eval_expr_list(&input_binding, exprs_ast)?;
+            let exprs = self.eval_expr_list(&input_binding, exprs_ast).await?;
             for (_, er) in exprs {
                 if !er.is_scalar() {
                     return Err("orderby requires scalar values".into());
@@ -1901,7 +1888,7 @@ impl SemanticAnalysis {
 
     // ── map / project ─────────────────────────────────────────────────────
 
-    fn analyze_map(
+    async fn analyze_map(
         &mut self,
         input: ExpressionResult,
         bound: &[Option<Box<Ast>>],
@@ -1910,7 +1897,7 @@ impl SemanticAnalysis {
         let (input_op, input_binding) = input.into_parts();
 
         let exprs_ast = bound[0].as_ref().ok_or("'map' missing expressions")?;
-        let exprs = self.eval_expr_list(&input_binding, exprs_ast)?;
+        let exprs = self.eval_expr_list(&input_binding, exprs_ast).await?;
 
         let mut results: Vec<(String, Box<Expr>, Rc<IU>)> = Vec::new();
         for (col_name, mut er) in exprs {
@@ -1972,7 +1959,7 @@ impl SemanticAnalysis {
 
     // ── projectout ────────────────────────────────────────────────────────
 
-    fn analyze_projectout(
+    async fn analyze_projectout(
         &mut self,
         input: ExpressionResult,
         bound: &[Option<Box<Ast>>],
@@ -1980,7 +1967,7 @@ impl SemanticAnalysis {
         let (input_op, mut input_binding) = input.into_parts();
 
         let exprs_ast = bound[0].as_ref().ok_or("'projectout' missing columns")?;
-        let exprs = self.eval_expr_list(&input_binding, exprs_ast)?;
+        let exprs = self.eval_expr_list(&input_binding, exprs_ast).await?;
 
         let mut to_remove: std::collections::HashSet<u64> = std::collections::HashSet::new();
         for (_, mut er) in exprs {
@@ -2012,7 +1999,7 @@ impl SemanticAnalysis {
 
     // ── case ──────────────────────────────────────────────────────────────
 
-    fn analyze_case(
+    async fn analyze_case(
         &mut self,
         scope: &BindingInfo,
         bound: &[Option<Box<Ast>>],
@@ -2023,11 +2010,11 @@ impl SemanticAnalysis {
         let mut cases: Vec<(Box<Expr>, Box<Expr>)> = Vec::new();
         for (key_opt, val_ast) in cases_list {
             let key_ast = key_opt.ok_or("case requires cases of the form 'a => b'")?;
-            let mut key_er = self.analyze_expression(scope, &key_ast)?;
+            let mut key_er = self.analyze_expression(scope, &key_ast).await?;
             if !key_er.is_scalar() {
                 return Err("case requires a scalar case value".into());
             }
-            let mut val_er = self.analyze_expression(scope, &val_ast)?;
+            let mut val_er = self.analyze_expression(scope, &val_ast).await?;
             if !val_er.is_scalar() {
                 return Err("case requires a scalar case result".into());
             }
@@ -2041,7 +2028,7 @@ impl SemanticAnalysis {
         let nullable = cases.iter().any(|(_, v)| v.typ().is_nullable());
 
         let default: Box<Expr> = if let Some(else_ast) = &bound[1] {
-            let mut er = self.analyze_expression(scope, else_ast)?;
+            let mut er = self.analyze_expression(scope, else_ast).await?;
             if !er.is_scalar() {
                 return Err("case 'else' must be scalar".into());
             }
@@ -2075,7 +2062,7 @@ impl SemanticAnalysis {
 
         // Searched vs simple case
         if let Some(search_ast) = &bound[2] {
-            let mut search_er = self.analyze_expression(scope, search_ast)?;
+            let mut search_er = self.analyze_expression(scope, search_ast).await?;
             if !search_er.is_scalar() {
                 return Err("case 'search' must be scalar".into());
             }
@@ -2104,7 +2091,7 @@ impl SemanticAnalysis {
 
     // ── table construction ────────────────────────────────────────────────
 
-    fn analyze_table_construction(
+    async fn analyze_table_construction(
         &mut self,
         scope: &BindingInfo,
         arg: &Ast,
@@ -2112,7 +2099,7 @@ impl SemanticAnalysis {
         // arg must be a list of row-lists
         let rows = match arg {
             Ast::Literal(_) | Ast::Identifier(_) => vec![vec![(None::<String>, arg.clone())]],
-            _ => self.extract_table_rows(scope, arg)?,
+            _ => self.extract_table_rows(scope, arg).await?,
         };
 
         if rows.is_empty() {
@@ -2138,7 +2125,7 @@ impl SemanticAnalysis {
                 });
             }
             for (col_idx, (_, val_ast)) in row.iter().enumerate() {
-                let mut er = self.analyze_expression(scope, val_ast)?;
+                let mut er = self.analyze_expression(scope, val_ast).await?;
                 if !er.is_scalar() {
                     return Err("inline tables require scalar values".into());
                 }
@@ -2186,7 +2173,7 @@ impl SemanticAnalysis {
         ))
     }
 
-    fn extract_table_rows(
+    async fn extract_table_rows(
         &self,
         _scope: &BindingInfo,
         arg: &Ast,
@@ -2226,7 +2213,7 @@ impl SemanticAnalysis {
 
     // ── foreigncall ───────────────────────────────────────────────────────
 
-    fn analyze_foreign_call(
+    async fn analyze_foreign_call(
         &mut self,
         scope: &BindingInfo,
         _sig: &Signature,
@@ -2246,7 +2233,7 @@ impl SemanticAnalysis {
 
         let mut args = Vec::new();
         if let Some(args_ast) = &bound[2] {
-            let exprs = self.eval_expr_list(scope, args_ast)?;
+            let exprs = self.eval_expr_list(scope, args_ast).await?;
             for (_, mut er) in exprs {
                 if !er.is_scalar() {
                     return Err("foreigncall arguments must be scalar".into());
@@ -2281,7 +2268,7 @@ impl SemanticAnalysis {
 
     // ── aggregate / window function handling ──────────────────────────────
 
-    fn handle_aggregate(
+    async fn handle_aggregate(
         &mut self,
         scope: &BindingInfo,
         name: &str,
@@ -2336,7 +2323,7 @@ impl SemanticAnalysis {
         let val_ast = bound[0]
             .as_ref()
             .ok_or_else(|| format!("aggregate '{name}' missing value argument"))?;
-        let mut val = self.analyze_expression(&pre_binding, val_ast)?;
+        let mut val = self.analyze_expression(&pre_binding, val_ast).await?;
         if !val.is_scalar() {
             return Err(format!("aggregate '{name}' requires a scalar argument"));
         }
@@ -2361,7 +2348,7 @@ impl SemanticAnalysis {
         Ok(ExpressionResult::scalar(Box::new(Expr::IURef(iu))))
     }
 
-    fn handle_window(
+    async fn handle_window(
         &mut self,
         scope: &BindingInfo,
         name: &str,
@@ -2384,19 +2371,19 @@ impl SemanticAnalysis {
             "dense_rank" => (AggOp::DenseRank, Type::integer(), true),
             "ntile" => (AggOp::NTile, Type::integer(), true),
             "lead" => {
-                let t = self.infer_window_value_type(scope, name, &bound[0])?;
+                let t = self.infer_window_value_type(scope, name, &bound[0]).await?;
                 (AggOp::Lead, t, true)
             }
             "lag" => {
-                let t = self.infer_window_value_type(scope, name, &bound[0])?;
+                let t = self.infer_window_value_type(scope, name, &bound[0]).await?;
                 (AggOp::Lag, t, true)
             }
             "first_value" => {
-                let t = self.infer_window_value_type(scope, name, &bound[0])?;
+                let t = self.infer_window_value_type(scope, name, &bound[0]).await?;
                 (AggOp::FirstValue, t, true)
             }
             "last_value" => {
-                let t = self.infer_window_value_type(scope, name, &bound[0])?;
+                let t = self.infer_window_value_type(scope, name, &bound[0]).await?;
                 (AggOp::LastValue, t, true)
             }
             _ => unreachable!(),
@@ -2408,7 +2395,7 @@ impl SemanticAnalysis {
             let val_ast = bound[0]
                 .as_ref()
                 .ok_or_else(|| format!("window function '{name}' missing value argument"))?;
-            let mut val = self.analyze_expression(&pre_binding, val_ast)?;
+            let mut val = self.analyze_expression(&pre_binding, val_ast).await?;
             if !val.is_scalar() {
                 return Err(format!(
                     "window function '{name}' requires a scalar argument"
@@ -2424,7 +2411,7 @@ impl SemanticAnalysis {
         if matches!(op, AggOp::Lead | AggOp::Lag) {
             let offset = if bound.len() > 1 && bound[1].is_some() {
                 let ast = bound[1].as_ref().unwrap();
-                let mut er = self.analyze_expression(&pre_binding, ast)?;
+                let mut er = self.analyze_expression(&pre_binding, ast).await?;
                 if !er.is_scalar() || er.expr_mut().typ().base != TypeBase::Integer {
                     return Err("lead/lag offset must be an integer".into());
                 }
@@ -2439,7 +2426,7 @@ impl SemanticAnalysis {
 
             let default = if bound.len() > 2 && bound[2].is_some() {
                 let ast = bound[2].as_ref().unwrap();
-                let mut er = self.analyze_expression(&pre_binding, ast)?;
+                let mut er = self.analyze_expression(&pre_binding, ast).await?;
                 if !er.is_scalar() {
                     return Err("lead/lag default must be scalar".into());
                 }
@@ -2463,7 +2450,7 @@ impl SemanticAnalysis {
         Ok(ExpressionResult::scalar(Box::new(Expr::IURef(iu))))
     }
 
-    fn infer_window_value_type(
+    async fn infer_window_value_type(
         &mut self,
         scope: &BindingInfo,
         name: &str,
@@ -2477,14 +2464,14 @@ impl SemanticAnalysis {
         let val_ast = val_ast_opt
             .as_ref()
             .ok_or_else(|| format!("'{name}' missing value argument"))?;
-        let mut er = self.analyze_expression(&pre_binding, val_ast)?;
+        let mut er = self.analyze_expression(&pre_binding, val_ast).await?;
         Ok(er.expr_mut().typ())
     }
 
     // ── expression list evaluation ────────────────────────────────────────
 
     /// Evaluate an argument that should produce a list of (name, expr) pairs.
-    fn eval_expr_list(
+    async fn eval_expr_list(
         &mut self,
         scope: &BindingInfo,
         ast: &Ast,
@@ -2502,10 +2489,10 @@ impl SemanticAnalysis {
         //
         // Actually, expression list arguments arrive wrapped in a synthetic
         // FuncArgListAst which we parse in bind_args. Let's just evaluate:
-        self.eval_expr_list_inner(scope, ast)
+        self.eval_expr_list_inner(scope, ast).await
     }
 
-    fn eval_expr_list_inner(
+    async fn eval_expr_list_inner(
         &mut self,
         scope: &BindingInfo,
         ast: &Ast,
@@ -2535,7 +2522,7 @@ impl SemanticAnalysis {
                                     ));
                                 }
                             } else {
-                                let er = self.analyze_expression(scope, value)?;
+                                let er = self.analyze_expression(scope, value).await?;
                                 // Resolve explicit column names through symbol args (e.g. gensym names)
                                 let col_name = if let Some(n) = name {
                                     self.extract_symbol_str(scope, n)
@@ -2555,7 +2542,7 @@ impl SemanticAnalysis {
             _ => {
                 // Single expression
                 let name = infer_name(ast);
-                let er = self.analyze_expression(scope, ast)?;
+                let er = self.analyze_expression(scope, ast).await?;
                 Ok(vec![(name, er)])
             }
         }
@@ -2580,12 +2567,31 @@ impl SemanticAnalysis {
         })
     }
 
-    fn eval_scalar_list(
+    async fn eval_scalar_arg(
+        &mut self,
+        scope: &BindingInfo,
+        arg_name: &str,
+        fn_name: &str,
+        ast_opt: &Option<Box<Ast>>,
+    ) -> Result<ExpressionResult, String> {
+        let ast = ast_opt
+            .as_ref()
+            .ok_or_else(|| format!("parameter '{arg_name}' missing in call to '{fn_name}'"))?;
+        let r = self.analyze_expression(scope, ast).await?;
+        if !r.is_scalar() {
+            return Err(format!(
+                "parameter '{arg_name}' requires a scalar in call to '{fn_name}'"
+            ));
+        }
+        Ok(r)
+    }
+
+    async fn eval_scalar_list(
         &mut self,
         scope: &BindingInfo,
         ast: &Ast,
     ) -> Result<Vec<ExpressionResult>, String> {
-        let exprs = self.eval_expr_list(scope, ast)?;
+        let exprs = self.eval_expr_list(scope, ast).await?;
         for (_, ref er) in &exprs {
             if !er.is_scalar() {
                 return Err("expected scalar values in list".into());

@@ -1,11 +1,16 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 // ── SchemaProvider trait ──────────────────────────────────────────────────────
 
 /// Lazy, on-demand schema lookup.  The table name may be a qualified
 /// `catalog.schema.table` name exactly as it appears in the query.
+///
+/// `lookup_table` returns a boxed future so the trait remains object-safe
+/// (`Box<dyn SchemaProvider>`) while still supporting async implementations.
 pub trait SchemaProvider {
-    fn lookup_table(&self, name: &str) -> Option<Table>;
+    fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>>;
 }
 
 
@@ -170,8 +175,8 @@ impl Schema {
 }
 
 impl SchemaProvider for Schema {
-    fn lookup_table(&self, name: &str) -> Option<Table> {
-        self.tables.get(name).cloned()
+    fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>> {
+        Box::pin(async move { self.tables.get(name).cloned() })
     }
 }
 
