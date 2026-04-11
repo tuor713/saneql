@@ -44,6 +44,40 @@ fn triple_part_table_name() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// limit()
+// ---------------------------------------------------------------------------
+
+const NATION: &[(&str, &[(&str, &str)])] = &[(
+    "nation",
+    &[
+        ("n_nationkey", "integer"),
+        ("n_name",      "varchar"),
+        ("n_regionkey", "integer"),
+        ("n_comment",   "varchar"),
+    ],
+)];
+
+/// `table.limit(n)` wraps the input in a bare LIMIT without ORDER BY.
+#[test]
+fn limit_simple() {
+    let sql = compile("nation.limit(100)", NATION);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "n_nationkey", v_2 as "n_name", v_3 as "n_regionkey", v_4 as "n_comment" from (select "n_nationkey" as v_1, "n_name" as v_2, "n_regionkey" as v_3, "n_comment" as v_4 from "nation") s limit 100"#
+    );
+}
+
+/// `limit()` can be chained after a filter.
+#[test]
+fn limit_after_filter() {
+    let sql = compile("nation.filter(n_regionkey = 1).limit(10)", NATION);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "n_nationkey", v_2 as "n_name", v_3 as "n_regionkey", v_4 as "n_comment" from (select * from (select "n_nationkey" as v_1, "n_name" as v_2, "n_regionkey" as v_3, "n_comment" as v_4 from "nation") s where v_3 = cast('1' as integer)) s limit 10"#
+    );
+}
+
 /// Three-part name where the table component itself contains dots
 /// (e.g. a Kafka topic name used via the Trino Kafka connector).
 /// SaneQL source: `kafka.default."my.topic.name"`

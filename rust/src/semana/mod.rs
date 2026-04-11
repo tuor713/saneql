@@ -1297,6 +1297,12 @@ impl SemanticAnalysis {
                 return self.analyze_orderby(b, &bound).await;
             }
 
+            // ── limit ─────────────────────────────────────────────────────
+            "limit" => {
+                let b = base.unwrap();
+                return self.analyze_limit(b, &bound).await;
+            }
+
             // ── map / project / projectout ────────────────────────────────
             "map" => {
                 let b = base.unwrap();
@@ -1882,6 +1888,25 @@ impl SemanticAnalysis {
             order,
             limit,
             offset,
+        });
+        Ok(ExpressionResult::table(op, input_binding))
+    }
+
+    // ── limit ─────────────────────────────────────────────────────────────
+
+    async fn analyze_limit(
+        &mut self,
+        input: ExpressionResult,
+        bound: &[Option<Box<Ast>>],
+    ) -> Result<ExpressionResult, String> {
+        let (input_op, input_binding) = input.into_parts();
+        let count_ast = bound[0].as_ref().ok_or("'limit' missing count argument")?;
+        let limit = extract_integer_const(count_ast)?;
+        let op = Box::new(Op::Sort {
+            input: input_op,
+            order: Vec::new(),
+            limit: Some(limit),
+            offset: None,
         });
         Ok(ExpressionResult::table(op, input_binding))
     }
@@ -2887,6 +2912,7 @@ fn method_sig(base: &ExpressionResult, name: &str) -> Option<Signature> {
                 a("limit", Expression, true),
                 a("offset", Expression, true),
             ],
+            "limit" => vec![a("count", Expression, false)],
             "map" => vec![a("expressions", ExpressionList, false)],
             "project" => vec![a("expressions", ExpressionList, false)],
             "projectout" => vec![a("columns", ExpressionList, false)],
