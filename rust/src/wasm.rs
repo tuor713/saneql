@@ -8,22 +8,27 @@
 //! import init, { compile } from './pkg/saneql.js';
 //! await init();
 //!
-//! const sql = await compile(query, (tableName) => {
-//!     const cols = myMetastore.columnsSync(tableName);
+//! const sql = await compile(query, async (tableName) => {
+//!     const cols = await myMetastore.columns(tableName);
 //!     if (!cols) return null;
 //!     return cols.map(c => ({ name: c.name, type: c.trinoType }));
 //! });
 //! ```
 //!
-//! The `get_columns` callback must be **synchronous**.  The outer `compile`
-//! call is already async (returns a `Promise<string>`), so the caller awaits
-//! that.  If schema metadata needs to be fetched asynchronously, pre-fetch
-//! and cache it before calling `compile`.
+//! The `get_columns` callback may be **async** (return a `Promise`).
+//! The outer `compile` call is also async (returns a `Promise<string>`).
 
 #[cfg(feature = "wasm")]
 mod inner {
-    use js_sys::{Array, Function, JsString, Object, Reflect};
+    use js_sys::{Array, Function, JsString, Object, Promise, Reflect};
     use wasm_bindgen::prelude::*;
+    use wasm_bindgen_futures::JsFuture;
+
+    macro_rules! log {
+        ($($t:tt)*) => {
+            web_sys::console::log_1(&format!($($t)*).into())
+        };
+    }
 
     use std::future::Future;
     use std::pin::Pin;
@@ -34,8 +39,8 @@ mod inner {
     /// Compile a SaneQL *query* string to SQL.
     ///
     /// * `query`       — the SaneQL source text.
-    /// * `get_columns` — a **sync** JS function
-    ///   `(tableName: string) => Array<{name: string, type: string}> | null`.
+    /// * `get_columns` — an **async** JS function
+    ///   `(tableName: string) => Promise<Array<{name: string, type: string}> | null>`.
     ///   Called lazily for each table referenced in the query.
     ///   Return `null` (or `undefined`) if the table does not exist.
     #[wasm_bindgen]
@@ -48,13 +53,16 @@ mod inner {
                 name: &'a str,
             ) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>> {
                 Box::pin(async move {
-                    let result = self
+                    log!("[saneql] looking up table: {}", name);
+                    let promise = self
                         .0
                         .call1(&JsValue::NULL, &JsValue::from_str(name))
                         .ok()?;
+                    let result = JsFuture::from(Promise::from(promise)).await.ok()?;
 
                     // null / undefined → table not found
                     if result.is_null() || result.is_undefined() {
+                        log!("[saneql] table '{}' not found (callback returned null/undefined)", name);
                         return None;
                     }
 
@@ -70,6 +78,7 @@ mod inner {
                         let typ = parse_type_str(&type_str).unwrap_or_else(Type::unknown);
                         columns.push(Column { name: col_name, typ });
                     }
+                    log!("[saneql] resolved table '{}': {} column(s)", name, columns.len());
                     Some(Table { columns })
                 })
             }

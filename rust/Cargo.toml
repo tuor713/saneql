@@ -13,11 +13,16 @@ wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 
 [features]
-wasm = ["wasm-bindgen", "js-sys", "wasm-bindgen-futures"]
+wasm = ["wasm-bindgen", "js-sys", "wasm-bindgen-futures", "web-sys"]
 
 [dependencies.wasm-bindgen-futures]
 version = "0.4"
 optional = true
+
+[dependencies.web-sys]
+version = "0.3"
+optional = true
+features = ["console"]
 
 [build-dependencies]
 lalrpop = "0.22"
