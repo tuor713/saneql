@@ -20,6 +20,7 @@ pub enum TypeBase {
     Unknown,
     Bool,
     Integer,
+    Double,
     Decimal { precision: u32, scale: u32 },
     Char { len: u32 },
     Varchar { len: u32 },
@@ -91,6 +92,12 @@ impl Type {
             nullable: false,
         }
     }
+    pub fn double() -> Self {
+        Self {
+            base: TypeBase::Double,
+            nullable: false,
+        }
+    }
 
     // ── nullability helpers ───────────────────────────────────────────────
     pub fn as_nullable(self) -> Self {
@@ -108,7 +115,7 @@ impl Type {
 
     // ── kind helpers ──────────────────────────────────────────────────────
     pub fn is_numeric(self) -> bool {
-        matches!(self.base, TypeBase::Integer | TypeBase::Decimal { .. })
+        matches!(self.base, TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. })
     }
     pub fn is_string(self) -> bool {
         matches!(
@@ -121,6 +128,7 @@ impl Type {
             TypeBase::Unknown => "unknown",
             TypeBase::Bool => "boolean",
             TypeBase::Integer => "integer",
+            TypeBase::Double => "double",
             TypeBase::Decimal { .. } => "decimal",
             TypeBase::Char { .. } => "char",
             TypeBase::Varchar { .. } => "varchar",
@@ -226,7 +234,7 @@ pub fn parse_type_str(s: &str) -> Option<Type> {
         "date" => Type::date(),
         "interval" | "interval year to month" | "interval day to second" => Type::interval(),
         "double" | "double precision" | "real" | "float" | "float4" | "float8" => {
-            Type::decimal(15, 6)
+            Type::double()
         }
         _ => return None,
     })

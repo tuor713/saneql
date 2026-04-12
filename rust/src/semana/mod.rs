@@ -1393,6 +1393,71 @@ impl SemanticAnalysis {
                 })));
             }
 
+            // ── math: preserve input type ─────────────────────────────────
+            "abs" | "ceil" | "ceiling" | "floor" | "sign" | "truncate" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                if !val.expr_mut().typ().is_numeric() {
+                    return Err(format!("'{name}' requires a numeric argument"));
+                }
+                let typ = val.expr_mut().typ();
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ,
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            "round" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                if !val.expr_mut().typ().is_numeric() {
+                    return Err("'round' requires a numeric argument".into());
+                }
+                let typ = val.expr_mut().typ();
+                let mut args = vec![take_expr(&mut val)];
+                if let Some(_) = &bound[1] {
+                    let mut d = self.eval_scalar_arg(scope, "decimals", name, &bound[1]).await?;
+                    if !d.expr_mut().typ().is_numeric() {
+                        return Err("'round' decimals argument must be numeric".into());
+                    }
+                    args.push(take_expr(&mut d));
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "round".to_string(),
+                    typ,
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── math: always return double ────────────────────────────────
+            "sqrt" | "cbrt" | "exp" | "ln" | "log2" | "log10"
+            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+            | "degrees" | "radians" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                if !val.expr_mut().typ().is_numeric() {
+                    return Err(format!("'{name}' requires a numeric argument"));
+                }
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::double(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── math: zero-argument constants ─────────────────────────────
+            "pi" | "e" | "infinity" | "nan" => {
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::double(),
+                    args: vec![],
+                    call_type: CallType::Function,
+                })));
+            }
+
             // ── foreigncall ───────────────────────────────────────────────
             "foreigncall" => {
                 return self.analyze_foreign_call(scope, sig, &bound).await;
@@ -2884,6 +2949,21 @@ fn free_function_sig(name: &str) -> Option<Signature> {
             a("arguments", ExpressionList, true),
             a("type", Symbol, true),
         ],
+
+        // ── math: preserve input type ─────────────────────────────────────
+        "abs" | "ceil" | "ceiling" | "floor" | "sign" | "truncate" => {
+            vec![a("value", Scalar, false)]
+        }
+        "round" => vec![a("value", Scalar, false), a("decimals", Scalar, true)],
+
+        // ── math: always return double ────────────────────────────────────
+        "sqrt" | "cbrt" | "exp" | "ln" | "log2" | "log10"
+        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "degrees" | "radians" => vec![a("value", Scalar, false)],
+
+        // ── math: zero-argument constants ─────────────────────────────────
+        "pi" | "e" | "infinity" | "nan" => vec![],
+
         _ => return None,
     };
     Some(Signature { args })
@@ -2967,6 +3047,7 @@ fn parse_simple_type(name: &str) -> Result<Type, String> {
         "date" => Ok(Type::date()),
         "interval" => Ok(Type::interval()),
         "text" => Ok(Type::text()),
+        "double" => Ok(Type::double()),
         other => Err(format!("unknown type '{other}'")),
     }
 }
@@ -3032,8 +3113,8 @@ fn enforce_comparable_exprs(a: &mut Box<Expr>, b: &mut Box<Expr>) -> Result<(), 
 
     let ok = match at.base {
         TypeBase::Bool => bt.base == TypeBase::Bool,
-        TypeBase::Integer | TypeBase::Decimal { .. } => {
-            matches!(bt.base, TypeBase::Integer | TypeBase::Decimal { .. })
+        TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. } => {
+            matches!(bt.base, TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. })
         }
         TypeBase::Char { .. } | TypeBase::Varchar { .. } | TypeBase::Text => matches!(
             bt.base,

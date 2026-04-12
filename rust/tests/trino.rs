@@ -78,6 +78,78 @@ fn limit_after_filter() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Math functions
+// ---------------------------------------------------------------------------
+
+const NUMS: &[(&str, &[(&str, &str)])] = &[(
+    "nums",
+    &[
+        ("i", "integer"),
+        ("d", "double"),
+    ],
+)];
+
+/// abs, ceil, floor, sign, truncate preserve the input type.
+#[test]
+fn math_preserve_type() {
+    let sql = compile("nums.map({a:=abs(i), b:=ceil(i), c:=floor(i), d:=sign(i), e:=truncate(i)})", NUMS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d", v_7 as "e" from (select *, abs(v_1) as v_3, ceil(v_1) as v_4, floor(v_1) as v_5, sign(v_1) as v_6, truncate(v_1) as v_7 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+    );
+}
+
+/// round with one and two arguments.
+#[test]
+fn math_round() {
+    let sql = compile("nums.map({a:=round(d), b:=round(d, 2)})", NUMS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select *, round(v_2) as v_3, round(v_2, cast('2' as integer)) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+    );
+}
+
+/// sqrt, ln, log2, log10, exp, cbrt return double.
+#[test]
+fn math_returns_double() {
+    let sql = compile("nums.map({a:=sqrt(i), b:=ln(i), c:=log2(i), d:=log10(i), e:=exp(i), f:=cbrt(i)})", NUMS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d", v_7 as "e", v_8 as "f" from (select *, sqrt(v_1) as v_3, ln(v_1) as v_4, log2(v_1) as v_5, log10(v_1) as v_6, exp(v_1) as v_7, cbrt(v_1) as v_8 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+    );
+}
+
+/// Trig functions return double.
+#[test]
+fn math_trig() {
+    let sql = compile("nums.map({a:=sin(d), b:=cos(d), c:=tan(d), x:=asin(d), y:=acos(d), z:=atan(d)})", NUMS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "x", v_7 as "y", v_8 as "z" from (select *, sin(v_2) as v_3, cos(v_2) as v_4, tan(v_2) as v_5, asin(v_2) as v_6, acos(v_2) as v_7, atan(v_2) as v_8 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+    );
+}
+
+/// degrees, radians conversions.
+#[test]
+fn math_angle_conversion() {
+    let sql = compile("nums.map({a:=degrees(d), b:=radians(d)})", NUMS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select *, degrees(v_2) as v_3, radians(v_2) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+    );
+}
+
+/// Zero-argument constants.
+#[test]
+fn math_constants() {
+    let sql = compile("nums.map({a:=pi(), b:=e(), c:=infinity(), d:=nan()})", NUMS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d" from (select *, pi() as v_3, e() as v_4, infinity() as v_5, nan() as v_6 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+    );
+}
+
 /// Three-part name where the table component itself contains dots
 /// (e.g. a Kafka topic name used via the Trino Kafka connector).
 /// SaneQL source: `kafka.default."my.topic.name"`
