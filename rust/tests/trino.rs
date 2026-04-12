@@ -175,3 +175,33 @@ fn dotted_topic_name() {
         r#"select v_1 as "key", v_2 as "message", v_3 as "partition" from (select "key" as v_1, "message" as v_2, "partition" as v_3 from "kafka"."default"."my.topic.name") s"#
     );
 }
+
+// ---------------------------------------------------------------------------
+// Let-function parameters visible inside filters on qualified tables
+// ---------------------------------------------------------------------------
+
+/// Regression test: a scalar parameter passed to a let-function must be
+/// visible inside a `.filter()` predicate when the table is referenced by a
+/// qualified (dotted) name.  Previously `memory.default.risk` was scanned
+/// with the root scope, so `d` was not found in the argument scope and the
+/// analyzer reported "unknown table 'd'".
+#[test]
+fn let_param_visible_in_qualified_table_filter() {
+    const TABLES: &[(&str, &[(&str, &str)])] = &[(
+        "memory.default.risk",
+        &[
+            ("businessdate", "integer"),
+            ("value",        "double"),
+        ],
+    )];
+
+    let sql = compile(
+        "let risk(d) := memory.default.risk.filter(businessdate = d),\nrisk(20250130).groupby({}, {c := count()})",
+        TABLES,
+    );
+
+    assert_eq!(
+        sql,
+        r#"select v_1 as "c" from (select count(*) as v_1 from (select * from (select "businessdate" as v_2, "value" as v_3 from "memory"."default"."risk") s where v_2 = cast('20250130' as integer)) s group by true) s"#
+    );
+}

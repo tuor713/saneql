@@ -698,8 +698,7 @@ impl SemanticAnalysis {
             parts.push(col_name.clone());
             let lookup_key = parts.join(".");
             if self.schema.lookup_table(&lookup_key).await.is_some() {
-                let root = self.root_scope();
-                return self.make_table_scan(&root, parts).await;
+                return self.make_table_scan(scope, parts).await;
             }
         }
 
