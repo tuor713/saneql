@@ -2496,22 +2496,39 @@ impl SemanticAnalysis {
             _ => return Err("table() requires a list of rows".into()),
         };
 
+        // If all top-level items are named Flat args, they describe the columns of a single
+        // row (e.g. table({a:=1, b:=2})). Otherwise each Flat is its own single-column row.
+        let all_named_flats = top_args
+            .iter()
+            .all(|fa| matches!(fa, FuncArg::Flat { name: Some(_), .. }));
+
         let mut rows: Vec<Vec<(Option<String>, Ast)>> = Vec::new();
-        for fa in top_args {
-            match fa {
-                FuncArg::List { items, .. } => {
-                    let row: Vec<(Option<String>, Ast)> = items
-                        .iter()
-                        .map(|item| match item {
-                            FuncArgNamed::Flat { name, value } => (name.clone(), *value.clone()),
-                            FuncArgNamed::Case { .. } => (None, Ast::Literal(Literal::Null)),
-                            FuncArgNamed::List { .. } => (None, Ast::Literal(Literal::Null)),
-                        })
-                        .collect();
-                    rows.push(row);
-                }
-                FuncArg::Flat { name, value } => {
-                    rows.push(vec![(name.clone(), *value.clone())]);
+        if all_named_flats && !top_args.is_empty() {
+            let row: Vec<(Option<String>, Ast)> = top_args
+                .iter()
+                .map(|fa| match fa {
+                    FuncArg::Flat { name, value } => (name.clone(), *value.clone()),
+                    _ => unreachable!(),
+                })
+                .collect();
+            rows.push(row);
+        } else {
+            for fa in top_args {
+                match fa {
+                    FuncArg::List { items, .. } => {
+                        let row: Vec<(Option<String>, Ast)> = items
+                            .iter()
+                            .map(|item| match item {
+                                FuncArgNamed::Flat { name, value } => (name.clone(), *value.clone()),
+                                FuncArgNamed::Case { .. } => (None, Ast::Literal(Literal::Null)),
+                                FuncArgNamed::List { .. } => (None, Ast::Literal(Literal::Null)),
+                            })
+                            .collect();
+                        rows.push(row);
+                    }
+                    FuncArg::Flat { name, value } => {
+                        rows.push(vec![(name.clone(), *value.clone())]);
+                    }
                 }
             }
         }

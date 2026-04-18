@@ -79,6 +79,21 @@ fn limit_after_filter() {
 }
 
 // ---------------------------------------------------------------------------
+// map() behaviour
+// ---------------------------------------------------------------------------
+
+/// map() must preserve columns that are not referenced in the map expressions.
+#[test]
+fn map_preserves_unreferenced_columns() {
+    let sql = compile("table({a:=1, b:=2}).map({c:=a+1})", &[]);
+    // b must appear in the output even though it is not referenced in the map
+    assert!(
+        sql.contains(r#"as "b""#),
+        "column 'b' missing from map output; got: {sql}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Math functions
 // ---------------------------------------------------------------------------
 
