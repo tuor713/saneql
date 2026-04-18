@@ -1457,6 +1457,224 @@ impl SemanticAnalysis {
                 })));
             }
 
+            // ── datetime: SQL keywords (current_date etc.) ────────────────
+            "current_date" | "current_timestamp" | "current_time" => {
+                let typ = if name == "current_date" { Type::date() } else { Type::timestamp() };
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ,
+                    args: vec![],
+                    call_type: CallType::Keyword,
+                })));
+            }
+
+            // ── datetime: zero-arg functions ──────────────────────────────
+            "now" => {
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "now".to_string(),
+                    typ: Type::timestamp(),
+                    args: vec![],
+                    call_type: CallType::Function,
+                })));
+            }
+            "current_timezone" => {
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "current_timezone".to_string(),
+                    typ: Type::text(),
+                    args: vec![],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: single-arg extractors (temporal → bigint) ───────
+            "year" | "quarter" | "month" | "week" | "week_of_year"
+            | "day" | "day_of_month" | "day_of_week" | "dow"
+            | "day_of_year" | "doy" | "year_of_week" | "yow"
+            | "hour" | "minute" | "second" | "millisecond"
+            | "timezone_hour" | "timezone_minute" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                if !val.expr_mut().typ().is_temporal() {
+                    return Err(format!("'{name}' requires a date or timestamp argument"));
+                }
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::integer(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: single-arg → date ───────────────────────────────
+            "from_iso8601_date" | "last_day_of_month" | "date" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::date(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: single-arg → timestamp ─────────────────────────
+            "from_iso8601_timestamp" | "from_iso8601_timestamp_nanos" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::timestamp(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: single-arg → double ─────────────────────────────
+            "to_unixtime" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                if !val.expr_mut().typ().is_temporal() {
+                    return Err("'to_unixtime' requires a timestamp argument".into());
+                }
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "to_unixtime".to_string(),
+                    typ: Type::double(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: single-arg → bigint ─────────────────────────────
+            "to_milliseconds" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "to_milliseconds".to_string(),
+                    typ: Type::integer(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: single-arg → varchar ────────────────────────────
+            "to_iso8601" | "human_readable_seconds" => {
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[0]).await?;
+                let e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::text(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: from_unixtime (1 or 2 args) ─────────────────────
+            "from_unixtime" => {
+                let mut u = self.eval_scalar_arg(scope, "unixtime", name, &bound[0]).await?;
+                if !u.expr_mut().typ().is_numeric() {
+                    return Err("'from_unixtime' requires a numeric unixtime argument".into());
+                }
+                let mut args = vec![take_expr(&mut u)];
+                if let Some(_) = &bound[1] {
+                    let z = take_expr(
+                        &mut self.eval_scalar_arg(scope, "zone", name, &bound[1]).await?,
+                    );
+                    args.push(z);
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "from_unixtime".to_string(),
+                    typ: Type::timestamp(),
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: two-arg → varchar ───────────────────────────────
+            "date_format" | "format_datetime" => {
+                let v = take_expr(
+                    &mut self.eval_scalar_arg(scope, "value", name, &bound[0]).await?,
+                );
+                let f = take_expr(
+                    &mut self.eval_scalar_arg(scope, "format", name, &bound[1]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::text(),
+                    args: vec![v, f],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: two-arg → timestamp ────────────────────────────
+            "date_parse" | "parse_datetime" | "at_timezone" | "with_timezone" => {
+                let v = take_expr(
+                    &mut self.eval_scalar_arg(scope, "value", name, &bound[0]).await?,
+                );
+                let f = take_expr(
+                    &mut self.eval_scalar_arg(scope, "format", name, &bound[1]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::timestamp(),
+                    args: vec![v, f],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: date_add(unit, value, timestamp) → same type ────
+            "date_add" => {
+                let unit = take_expr(
+                    &mut self.eval_scalar_arg(scope, "unit", name, &bound[0]).await?,
+                );
+                let val = take_expr(
+                    &mut self.eval_scalar_arg(scope, "value", name, &bound[1]).await?,
+                );
+                let mut ts = self.eval_scalar_arg(scope, "timestamp", name, &bound[2]).await?;
+                let typ = ts.expr_mut().typ();
+                let ts_e = take_expr(&mut ts);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "date_add".to_string(),
+                    typ,
+                    args: vec![unit, val, ts_e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: date_diff(unit, ts1, ts2) → bigint ─────────────
+            "date_diff" => {
+                let unit = take_expr(
+                    &mut self.eval_scalar_arg(scope, "unit", name, &bound[0]).await?,
+                );
+                let ts1 = take_expr(
+                    &mut self.eval_scalar_arg(scope, "timestamp1", name, &bound[1]).await?,
+                );
+                let ts2 = take_expr(
+                    &mut self.eval_scalar_arg(scope, "timestamp2", name, &bound[2]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "date_diff".to_string(),
+                    typ: Type::integer(),
+                    args: vec![unit, ts1, ts2],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── datetime: date_trunc(unit, value) → same type ─────────────
+            "date_trunc" => {
+                let unit = take_expr(
+                    &mut self.eval_scalar_arg(scope, "unit", name, &bound[0]).await?,
+                );
+                let mut val = self.eval_scalar_arg(scope, "value", name, &bound[1]).await?;
+                let typ = val.expr_mut().typ();
+                let val_e = take_expr(&mut val);
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "date_trunc".to_string(),
+                    typ,
+                    args: vec![unit, val_e],
+                    call_type: CallType::Function,
+                })));
+            }
+
             // ── foreigncall ───────────────────────────────────────────────
             "foreigncall" => {
                 return self.analyze_foreign_call(scope, sig, &bound).await;
@@ -2963,6 +3181,66 @@ fn free_function_sig(name: &str) -> Option<Signature> {
         // ── math: zero-argument constants ─────────────────────────────────
         "pi" | "e" | "infinity" | "nan" => vec![],
 
+        // ── datetime: SQL keywords (no args, no parens) ───────────────────
+        "current_date" | "current_timestamp" | "current_time" => vec![],
+
+        // ── datetime: zero-arg functions ──────────────────────────────────
+        "now" | "current_timezone" => vec![],
+
+        // ── datetime: single-arg extractors (temporal → bigint) ───────────
+        "year" | "quarter" | "month" | "week" | "week_of_year"
+        | "day" | "day_of_month" | "day_of_week" | "dow"
+        | "day_of_year" | "doy" | "year_of_week" | "yow"
+        | "hour" | "minute" | "second" | "millisecond"
+        | "timezone_hour" | "timezone_minute" => vec![a("value", Scalar, false)],
+
+        // ── datetime: single-arg → date ───────────────────────────────────
+        "from_iso8601_date" | "last_day_of_month" | "date" => vec![a("value", Scalar, false)],
+
+        // ── datetime: single-arg → timestamp ─────────────────────────────
+        "from_iso8601_timestamp" | "from_iso8601_timestamp_nanos" => {
+            vec![a("value", Scalar, false)]
+        }
+
+        // ── datetime: single-arg → double ─────────────────────────────────
+        "to_unixtime" => vec![a("value", Scalar, false)],
+
+        // ── datetime: single-arg → bigint ─────────────────────────────────
+        "to_milliseconds" => vec![a("value", Scalar, false)],
+
+        // ── datetime: single-arg → varchar ────────────────────────────────
+        "to_iso8601" | "human_readable_seconds" => vec![a("value", Scalar, false)],
+
+        // ── datetime: from_unixtime (1 or 2 args) ─────────────────────────
+        "from_unixtime" => vec![a("unixtime", Scalar, false), a("zone", Scalar, true)],
+
+        // ── datetime: two-arg → varchar ───────────────────────────────────
+        "date_format" | "format_datetime" => {
+            vec![a("value", Scalar, false), a("format", Scalar, false)]
+        }
+
+        // ── datetime: two-arg → timestamp ────────────────────────────────
+        "date_parse" | "parse_datetime" | "at_timezone" | "with_timezone" => {
+            vec![a("value", Scalar, false), a("format", Scalar, false)]
+        }
+
+        // ── datetime: date_add(unit, value, timestamp) → same type ────────
+        "date_add" => vec![
+            a("unit", Scalar, false),
+            a("value", Scalar, false),
+            a("timestamp", Scalar, false),
+        ],
+
+        // ── datetime: date_diff(unit, ts1, ts2) → bigint ─────────────────
+        "date_diff" => vec![
+            a("unit", Scalar, false),
+            a("timestamp1", Scalar, false),
+            a("timestamp2", Scalar, false),
+        ],
+
+        // ── datetime: date_trunc(unit, value) → same type ─────────────────
+        "date_trunc" => vec![a("unit", Scalar, false), a("value", Scalar, false)],
+
         _ => return None,
     };
     Some(Signature { args })
@@ -3120,6 +3398,7 @@ fn enforce_comparable_exprs(a: &mut Box<Expr>, b: &mut Box<Expr>) -> Result<(), 
             TypeBase::Char { .. } | TypeBase::Varchar { .. } | TypeBase::Text
         ),
         TypeBase::Date => bt.base == TypeBase::Date,
+        TypeBase::Timestamp => bt.base == TypeBase::Timestamp,
         TypeBase::Interval => bt.base == TypeBase::Interval,
         TypeBase::Unknown => true,
     };

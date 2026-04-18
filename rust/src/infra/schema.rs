@@ -26,6 +26,7 @@ pub enum TypeBase {
     Varchar { len: u32 },
     Text,
     Date,
+    Timestamp,
     Interval,
 }
 
@@ -86,6 +87,12 @@ impl Type {
             nullable: false,
         }
     }
+    pub fn timestamp() -> Self {
+        Self {
+            base: TypeBase::Timestamp,
+            nullable: false,
+        }
+    }
     pub fn interval() -> Self {
         Self {
             base: TypeBase::Interval,
@@ -117,6 +124,9 @@ impl Type {
     pub fn is_numeric(self) -> bool {
         matches!(self.base, TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. })
     }
+    pub fn is_temporal(self) -> bool {
+        matches!(self.base, TypeBase::Date | TypeBase::Timestamp)
+    }
     pub fn is_string(self) -> bool {
         matches!(
             self.base,
@@ -134,6 +144,7 @@ impl Type {
             TypeBase::Varchar { .. } => "varchar",
             TypeBase::Text => "text",
             TypeBase::Date => "date",
+            TypeBase::Timestamp => "timestamp",
             TypeBase::Interval => "interval",
         }
     }
@@ -232,6 +243,7 @@ pub fn parse_type_str(s: &str) -> Option<Type> {
         "text" | "string" => Type::text(),
         "varchar" | "character varying" => Type::text(), // unbounded
         "date" => Type::date(),
+        "timestamp" | "timestamp with time zone" => Type::timestamp(),
         "interval" | "interval year to month" | "interval day to second" => Type::interval(),
         "double" | "double precision" | "real" | "float" | "float4" | "float8" => {
             Type::double()

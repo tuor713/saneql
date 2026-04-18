@@ -60,6 +60,7 @@ impl SqlWriter {
             TypeBase::Varchar { len }   => format!("varchar({len})"),
             TypeBase::Text              => "text".to_string(),
             TypeBase::Date              => "date".to_string(),
+            TypeBase::Timestamp         => "timestamp".to_string(),
             TypeBase::Interval          => "interval".to_string(),
         };
         self.buf.push_str(&s);

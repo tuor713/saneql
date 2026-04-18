@@ -102,6 +102,8 @@ pub enum CallType {
     Function,
     LeftAssoc,
     RightAssoc,
+    /// SQL keyword — rendered as bare name, no parentheses (e.g. `current_date`)
+    Keyword,
 }
 
 // ── Extract date part ─────────────────────────────────────────────────────────
@@ -471,6 +473,9 @@ impl Expr {
                         for _ in 0..args.len().saturating_sub(2) {
                             out.write(")");
                         }
+                    }
+                    CallType::Keyword => {
+                        out.write(name);
                     }
                 }
             }

@@ -150,6 +150,71 @@ fn math_constants() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Date / time functions
+// ---------------------------------------------------------------------------
+
+const EVENTS: &[(&str, &[(&str, &str)])] = &[(
+    "events",
+    &[
+        ("ts",  "timestamp"),
+        ("dt",  "date"),
+        ("val", "double"),
+    ],
+)];
+
+/// current_date, current_timestamp and now().
+#[test]
+fn datetime_current() {
+    let sql = compile(
+        "events.map({a:=current_date(), b:=current_timestamp(), c:=now()})",
+        EVENTS,
+    );
+    assert_eq!(
+        sql,
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "a", v_5 as "b", v_6 as "c" from (select *, current_date as v_4, current_timestamp as v_5, now() as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+    );
+}
+
+/// Extraction functions: year, month, day, hour, minute, second.
+#[test]
+fn datetime_extractors() {
+    let sql = compile(
+        "events.map({y:=year(ts), mo:=month(ts), d:=day(ts), h:=hour(ts), mi:=minute(ts), s:=second(ts)})",
+        EVENTS,
+    );
+    assert_eq!(
+        sql,
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "y", v_5 as "mo", v_6 as "d", v_7 as "h", v_8 as "mi", v_9 as "s" from (select *, year(v_1) as v_4, month(v_1) as v_5, day(v_1) as v_6, hour(v_1) as v_7, minute(v_1) as v_8, second(v_1) as v_9 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+    );
+}
+
+/// date_diff, date_add, date_trunc.
+#[test]
+fn datetime_arithmetic() {
+    let sql = compile(
+        r#"events.map({diff:=date_diff('day', dt, ts), added:=date_add('hour', 1, ts), trunc:=date_trunc('month', ts)})"#,
+        EVENTS,
+    );
+    assert_eq!(
+        sql,
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "diff", v_5 as "added", v_6 as "trunc" from (select *, date_diff('day', v_2, v_1) as v_4, date_add('hour', cast('1' as integer), v_1) as v_5, date_trunc('month', v_1) as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+    );
+}
+
+/// date_format, to_unixtime, from_unixtime, to_iso8601, from_iso8601_date.
+#[test]
+fn datetime_conversions() {
+    let sql = compile(
+        r#"events.map({fmt:=date_format(ts, '%Y-%m-%d'), unix:=to_unixtime(ts), back:=from_unixtime(val), iso:=to_iso8601(dt), d2:=from_iso8601_date('2024-01-01')})"#,
+        EVENTS,
+    );
+    assert_eq!(
+        sql,
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "fmt", v_5 as "unix", v_6 as "back", v_7 as "iso", v_8 as "d2" from (select *, date_format(v_1, '%Y-%m-%d') as v_4, to_unixtime(v_1) as v_5, from_unixtime(v_3) as v_6, to_iso8601(v_2) as v_7, from_iso8601_date('2024-01-01') as v_8 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+    );
+}
+
 /// Three-part name where the table component itself contains dots
 /// (e.g. a Kafka topic name used via the Trino Kafka connector).
 /// SaneQL source: `kafka.default."my.topic.name"`
