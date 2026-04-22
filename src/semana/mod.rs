@@ -1878,6 +1878,7 @@ impl SemanticAnalysis {
             tree = Box::new(Op::Map {
                 input: tree,
                 computations: map_computations,
+                pass_throughs: None,
             });
         }
 
@@ -2208,18 +2209,11 @@ impl SemanticAnalysis {
 
         let mut results: Vec<(String, Box<Expr>, Rc<IU>)> = Vec::new();
         for (col_name, mut er) in exprs {
-            if !project {
-                // columns are processed in the right order
-                println!("Map column {col_name}");
-            }
             if !er.is_scalar() {
                 return Err("map requires scalar values".into());
             }
             let et = er.expr_mut().typ();
             let iu = self.new_iu(et);
-            let id = iu.id;
-            let typ = iu.typ;
-            println!("Created IU {id:?}/{typ:?}");
             results.push((col_name, take_expr(&mut er), iu));
         }
 
@@ -2253,10 +2247,10 @@ impl SemanticAnalysis {
                 // Insert Map below any Sort at the top
                 tree = insert_map_below_sort(tree, computations);
             } else {
-                println!("Computations {computations:?}");
                 tree = Box::new(Op::Map {
                     input: tree,
                     computations,
+                    pass_throughs: None,
                 });
             }
         }
@@ -3453,6 +3447,7 @@ fn insert_map_below_sort(tree: Box<Op>, computations: Vec<MapEntry>) -> Box<Op> 
             let new_input = Box::new(Op::Map {
                 input,
                 computations,
+                pass_throughs: None,
             });
             Box::new(Op::Sort {
                 input: new_input,
@@ -3464,6 +3459,7 @@ fn insert_map_below_sort(tree: Box<Op>, computations: Vec<MapEntry>) -> Box<Op> 
         other => Box::new(Op::Map {
             input: Box::new(other),
             computations,
+            pass_throughs: None,
         }),
     }
 }

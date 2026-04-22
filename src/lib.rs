@@ -7,12 +7,91 @@ pub mod wasm;
 
 pub use parser::parse;
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use infra::schema::{Column, SchemaProvider, Table, parse_type_str};
 use semana::SemanticAnalysis;
 use algebra::Op;
+use std::rc::Rc;
 use sql::SqlWriter;
+
+/// Prune the Op tree top-down, keeping only columns needed by the consumer.
+/// `needed` is the set of IU ids required from this Op's output.
+fn prune_op(op: Box<Op>, needed: &HashSet<u64>) -> Box<Op> {
+    match *op {
+        Op::TableScan { parts, columns } => {
+            let pruned = columns.into_iter()
+                .filter(|(_, iu)| needed.contains(&iu.id))
+                .collect();
+            Box::new(Op::TableScan { parts, columns: pruned })
+        }
+
+        Op::Select { input, condition } => {
+            let mut from_input = needed.clone();
+            condition.collect_iu_ids(&mut from_input);
+            Box::new(Op::Select {
+                input: prune_op(input, &from_input),
+                condition,
+            })
+        }
+
+        Op::Map { input, computations, .. } => {
+            let (kept_comps, _): (Vec<_>, Vec<_>) = computations
+                .into_iter()
+                .partition(|c| c.iu.as_ref().map_or(false, |iu| needed.contains(&iu.id)));
+
+            let comp_ids: HashSet<u64> = kept_comps.iter()
+                .filter_map(|c| c.iu.as_ref())
+                .map(|iu| iu.id)
+                .collect();
+
+            let mut from_input: HashSet<u64> = needed.difference(&comp_ids).cloned().collect();
+            for c in &kept_comps {
+                c.value.collect_iu_ids(&mut from_input);
+            }
+
+            let input_produced = input.produced_ius();
+            let mut pass_throughs: Vec<_> = needed.difference(&comp_ids)
+                .filter_map(|id| input_produced.get(id).map(Rc::clone))
+                .collect();
+            pass_throughs.sort_by_key(|iu| iu.id);
+
+            Box::new(Op::Map {
+                input: prune_op(input, &from_input),
+                computations: kept_comps,
+                pass_throughs: Some(pass_throughs),
+            })
+        }
+
+        Op::Sort { input, order, limit, offset } => {
+            let mut from_input = needed.clone();
+            for o in &order { o.value.collect_iu_ids(&mut from_input); }
+            Box::new(Op::Sort {
+                input: prune_op(input, &from_input),
+                order,
+                limit,
+                offset,
+            })
+        }
+
+        Op::GroupBy { input, group_by, aggregates } => {
+            let mut from_input = HashSet::new();
+            for g in &group_by { g.value.collect_iu_ids(&mut from_input); }
+            for a in &aggregates {
+                if let Some(v) = &a.value { v.collect_iu_ids(&mut from_input); }
+                for p in &a.params { p.collect_iu_ids(&mut from_input); }
+            }
+            Box::new(Op::GroupBy {
+                input: prune_op(input, &from_input),
+                group_by,
+                aggregates,
+            })
+        }
+
+        other => Box::new(other),
+    }
+}
 
 /// Internal: compile a parsed query using any [`SchemaProvider`].
 pub(crate) async fn compile_inner(input: &str, schema: Box<dyn SchemaProvider>) -> Result<String, String> {
@@ -30,6 +109,9 @@ pub(crate) async fn compile_inner(input: &str, schema: Box<dyn SchemaProvider>) 
     }
 
     let (op, binding) = result.into_parts();
+
+    let needed: HashSet<u64> = binding.columns.iter().map(|c| c.iu.id).collect();
+    let op = prune_op(op, &needed);
 
     let mut out = SqlWriter::new();
 

@@ -111,7 +111,7 @@ fn math_preserve_type() {
     let sql = compile("nums.map({a:=abs(i), b:=ceil(i), c:=floor(i), d:=sign(i), e:=truncate(i)})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d", v_7 as "e" from (select *, abs(v_1) as v_3, ceil(v_1) as v_4, floor(v_1) as v_5, sign(v_1) as v_6, truncate(v_1) as v_7 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d", v_7 as "e" from (select v_1, v_2, abs(v_1) as v_3, ceil(v_1) as v_4, floor(v_1) as v_5, sign(v_1) as v_6, truncate(v_1) as v_7 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -121,7 +121,7 @@ fn math_round() {
     let sql = compile("nums.map({a:=round(d), b:=round(d, 2)})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select *, round(v_2) as v_3, round(v_2, cast('2' as integer)) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select v_1, v_2, round(v_2) as v_3, round(v_2, cast('2' as integer)) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -131,7 +131,7 @@ fn math_returns_double() {
     let sql = compile("nums.map({a:=sqrt(i), b:=ln(i), c:=log2(i), d:=log10(i), e:=exp(i), f:=cbrt(i)})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d", v_7 as "e", v_8 as "f" from (select *, sqrt(v_1) as v_3, ln(v_1) as v_4, log2(v_1) as v_5, log10(v_1) as v_6, exp(v_1) as v_7, cbrt(v_1) as v_8 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d", v_7 as "e", v_8 as "f" from (select v_1, v_2, sqrt(v_1) as v_3, ln(v_1) as v_4, log2(v_1) as v_5, log10(v_1) as v_6, exp(v_1) as v_7, cbrt(v_1) as v_8 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -141,7 +141,7 @@ fn math_trig() {
     let sql = compile("nums.map({a:=sin(d), b:=cos(d), c:=tan(d), x:=asin(d), y:=acos(d), z:=atan(d)})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "x", v_7 as "y", v_8 as "z" from (select *, sin(v_2) as v_3, cos(v_2) as v_4, tan(v_2) as v_5, asin(v_2) as v_6, acos(v_2) as v_7, atan(v_2) as v_8 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "x", v_7 as "y", v_8 as "z" from (select v_1, v_2, sin(v_2) as v_3, cos(v_2) as v_4, tan(v_2) as v_5, asin(v_2) as v_6, acos(v_2) as v_7, atan(v_2) as v_8 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -151,7 +151,7 @@ fn math_angle_conversion() {
     let sql = compile("nums.map({a:=degrees(d), b:=radians(d)})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select *, degrees(v_2) as v_3, radians(v_2) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select v_1, v_2, degrees(v_2) as v_3, radians(v_2) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -161,7 +161,7 @@ fn math_constants() {
     let sql = compile("nums.map({a:=pi(), b:=e(), c:=infinity(), d:=nan()})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d" from (select *, pi() as v_3, e() as v_4, infinity() as v_5, nan() as v_6 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b", v_5 as "c", v_6 as "d" from (select v_1, v_2, pi() as v_3, e() as v_4, infinity() as v_5, nan() as v_6 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -187,7 +187,7 @@ fn datetime_current() {
     );
     assert_eq!(
         sql,
-        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "a", v_5 as "b", v_6 as "c" from (select *, current_date as v_4, current_timestamp as v_5, now() as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "a", v_5 as "b", v_6 as "c" from (select v_1, v_2, v_3, current_date as v_4, current_timestamp as v_5, now() as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
     );
 }
 
@@ -200,7 +200,7 @@ fn datetime_extractors() {
     );
     assert_eq!(
         sql,
-        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "y", v_5 as "mo", v_6 as "d", v_7 as "h", v_8 as "mi", v_9 as "s" from (select *, year(v_1) as v_4, month(v_1) as v_5, day(v_1) as v_6, hour(v_1) as v_7, minute(v_1) as v_8, second(v_1) as v_9 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "y", v_5 as "mo", v_6 as "d", v_7 as "h", v_8 as "mi", v_9 as "s" from (select v_1, v_2, v_3, year(v_1) as v_4, month(v_1) as v_5, day(v_1) as v_6, hour(v_1) as v_7, minute(v_1) as v_8, second(v_1) as v_9 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
     );
 }
 
@@ -213,7 +213,7 @@ fn datetime_arithmetic() {
     );
     assert_eq!(
         sql,
-        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "diff", v_5 as "added", v_6 as "trunc" from (select *, date_diff('day', v_2, v_1) as v_4, date_add('hour', cast('1' as integer), v_1) as v_5, date_trunc('month', v_1) as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "diff", v_5 as "added", v_6 as "trunc" from (select v_1, v_2, v_3, date_diff('day', v_2, v_1) as v_4, date_add('hour', cast('1' as integer), v_1) as v_5, date_trunc('month', v_1) as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
     );
 }
 
@@ -226,7 +226,7 @@ fn datetime_conversions() {
     );
     assert_eq!(
         sql,
-        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "fmt", v_5 as "unix", v_6 as "back", v_7 as "iso", v_8 as "d2" from (select *, date_format(v_1, '%Y-%m-%d') as v_4, to_unixtime(v_1) as v_5, from_unixtime(v_3) as v_6, to_iso8601(v_2) as v_7, from_iso8601_date('2024-01-01') as v_8 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "fmt", v_5 as "unix", v_6 as "back", v_7 as "iso", v_8 as "d2" from (select v_1, v_2, v_3, date_format(v_1, '%Y-%m-%d') as v_4, to_unixtime(v_1) as v_5, from_unixtime(v_3) as v_6, to_iso8601(v_2) as v_7, from_iso8601_date('2024-01-01') as v_8 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
     );
 }
 
@@ -282,6 +282,6 @@ fn let_param_visible_in_qualified_table_filter() {
 
     assert_eq!(
         sql,
-        r#"select v_1 as "c" from (select count(*) as v_1 from (select * from (select "businessdate" as v_2, "value" as v_3 from "memory"."default"."risk") s where v_2 = cast('20250130' as integer)) s group by true) s"#
+        r#"select v_1 as "c" from (select count(*) as v_1 from (select * from (select "businessdate" as v_2 from "memory"."default"."risk") s where v_2 = cast('20250130' as integer)) s group by true) s"#
     );
 }

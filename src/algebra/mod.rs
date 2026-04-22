@@ -1,5 +1,6 @@
 use crate::infra::schema::Type;
 use crate::sql::writer::SqlWriter;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 // ── IU (Information Unit) ────────────────────────────────────────────────────
@@ -242,6 +243,57 @@ impl Expr {
             Expr::SearchedCase { default, .. } => default.typ(),
             Expr::Aggregate { computation, .. } => computation.typ(),
             Expr::ForeignCall { typ, .. } => *typ,
+        }
+    }
+
+    pub fn collect_iu_ids(&self, out: &mut HashSet<u64>) {
+        match self {
+            Expr::IURef(iu) => { out.insert(iu.id); }
+            Expr::Const { .. } => {}
+            Expr::Cast { input, .. } => input.collect_iu_ids(out),
+            Expr::Comparison { left, right, .. } => {
+                left.collect_iu_ids(out);
+                right.collect_iu_ids(out);
+            }
+            Expr::Between { base, lower, upper, .. } => {
+                base.collect_iu_ids(out);
+                lower.collect_iu_ids(out);
+                upper.collect_iu_ids(out);
+            }
+            Expr::In { probe, values, .. } => {
+                probe.collect_iu_ids(out);
+                for v in values { v.collect_iu_ids(out); }
+            }
+            Expr::Binary { left, right, .. } => {
+                left.collect_iu_ids(out);
+                right.collect_iu_ids(out);
+            }
+            Expr::Unary { input, .. } => input.collect_iu_ids(out),
+            Expr::Extract { input, .. } => input.collect_iu_ids(out),
+            Expr::Substr { value, from, len } => {
+                value.collect_iu_ids(out);
+                if let Some(f) = from { f.collect_iu_ids(out); }
+                if let Some(l) = len { l.collect_iu_ids(out); }
+            }
+            Expr::SimpleCase { value, cases, default } => {
+                value.collect_iu_ids(out);
+                for (w, t) in cases { w.collect_iu_ids(out); t.collect_iu_ids(out); }
+                default.collect_iu_ids(out);
+            }
+            Expr::SearchedCase { cases, default } => {
+                for (w, t) in cases { w.collect_iu_ids(out); t.collect_iu_ids(out); }
+                default.collect_iu_ids(out);
+            }
+            Expr::Aggregate { aggregates, computation, .. } => {
+                computation.collect_iu_ids(out);
+                for a in aggregates {
+                    if let Some(v) = &a.value { v.collect_iu_ids(out); }
+                    for p in &a.params { p.collect_iu_ids(out); }
+                }
+            }
+            Expr::ForeignCall { args, .. } => {
+                for a in args { a.collect_iu_ids(out); }
+            }
         }
     }
 
@@ -513,6 +565,8 @@ pub enum Op {
     Map {
         input: Box<Op>,
         computations: Vec<MapEntry>,
+        /// When Some, explicit pass-through IUs (pruned). When None, pass all via select *.
+        pass_throughs: Option<Vec<Rc<IU>>>,
     },
     Join {
         left: Box<Op>,
@@ -584,14 +638,32 @@ impl Op {
             Op::Map {
                 input,
                 computations,
+                pass_throughs,
             } => {
-                out.write("(select *");
-                println!("Output computations {computations:?}");
-                for c in computations {
-                    out.write(", ");
-                    c.value.generate(out);
-                    out.write(" as ");
-                    out.write_iu(c.iu.as_ref().expect("map entry must have iu"));
+                out.write("(select ");
+                if let Some(ref pts) = pass_throughs {
+                    let mut first = true;
+                    for iu in pts {
+                        if !first { out.write(", "); }
+                        first = false;
+                        out.write_iu(iu);
+                    }
+                    for c in computations {
+                        if !first { out.write(", "); }
+                        first = false;
+                        c.value.generate(out);
+                        out.write(" as ");
+                        out.write_iu(c.iu.as_ref().expect("map entry must have iu"));
+                    }
+                    if first { out.write("*"); } // defensive: pruned Map with nothing to emit
+                } else {
+                    out.write("*");
+                    for c in computations {
+                        out.write(", ");
+                        c.value.generate(out);
+                        out.write(" as ");
+                        out.write_iu(c.iu.as_ref().expect("map entry must have iu"));
+                    }
                 }
                 out.write(" from ");
                 input.generate(out);
@@ -857,6 +929,49 @@ impl Op {
                     out.write(" limit 0");
                 }
                 out.write(")");
+            }
+        }
+    }
+
+    /// Returns a map of IU id → Rc<IU> for all IUs this Op exposes to its parent.
+    pub fn produced_ius(&self) -> HashMap<u64, Rc<IU>> {
+        match self {
+            Op::TableScan { columns, .. } => {
+                columns.iter().map(|(_, iu)| (iu.id, Rc::clone(iu))).collect()
+            }
+            Op::Map { input, computations, .. } => {
+                let mut m = input.produced_ius();
+                for c in computations {
+                    if let Some(iu) = &c.iu {
+                        m.insert(iu.id, Rc::clone(iu));
+                    }
+                }
+                m
+            }
+            Op::Select { input, .. } | Op::Sort { input, .. } => input.produced_ius(),
+            Op::Window { input, aggregates, .. } => {
+                let mut m = input.produced_ius();
+                for a in aggregates { m.insert(a.iu.id, Rc::clone(&a.iu)); }
+                m
+            }
+            Op::GroupBy { group_by, aggregates, .. } => {
+                let mut m = HashMap::new();
+                for g in group_by {
+                    if let Some(iu) = &g.iu { m.insert(iu.id, Rc::clone(iu)); }
+                }
+                for a in aggregates { m.insert(a.iu.id, Rc::clone(&a.iu)); }
+                m
+            }
+            Op::Join { left, right, .. } => {
+                let mut m = left.produced_ius();
+                m.extend(right.produced_ius());
+                m
+            }
+            Op::SetOperation { result_cols, .. } => {
+                result_cols.iter().map(|iu| (iu.id, Rc::clone(iu))).collect()
+            }
+            Op::InlineTable { columns, .. } => {
+                columns.iter().map(|iu| (iu.id, Rc::clone(iu))).collect()
             }
         }
     }
