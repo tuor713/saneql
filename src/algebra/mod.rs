@@ -308,6 +308,8 @@ impl Expr {
             } => {
                 if typ.is_string() {
                     out.write_string(v);
+                } else if typ.is_integer() {
+                    out.write(v);
                 } else {
                     out.write("cast(");
                     out.write_string(v);

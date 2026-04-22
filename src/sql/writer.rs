@@ -54,6 +54,7 @@ impl SqlWriter {
             TypeBase::Unknown           => "unknown".to_string(),
             TypeBase::Bool              => "boolean".to_string(),
             TypeBase::Integer           => "integer".to_string(),
+            TypeBase::Bigint            => "bigint".to_string(),
             TypeBase::Double            => "double".to_string(),
             TypeBase::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
             TypeBase::Char    { len }   => format!("char({len})"),

@@ -74,7 +74,7 @@ fn limit_after_filter() {
     let sql = compile("nation.filter(n_regionkey = 1).limit(10)", NATION);
     assert_eq!(
         sql,
-        r#"select v_1 as "n_nationkey", v_2 as "n_name", v_3 as "n_regionkey", v_4 as "n_comment" from (select * from (select "n_nationkey" as v_1, "n_name" as v_2, "n_regionkey" as v_3, "n_comment" as v_4 from "nation") s where v_3 = cast('1' as integer)) s limit 10"#
+        r#"select v_1 as "n_nationkey", v_2 as "n_name", v_3 as "n_regionkey", v_4 as "n_comment" from (select * from (select "n_nationkey" as v_1, "n_name" as v_2, "n_regionkey" as v_3, "n_comment" as v_4 from "nation") s where v_3 = 1) s limit 10"#
     );
 }
 
@@ -121,7 +121,7 @@ fn math_round() {
     let sql = compile("nums.map({a:=round(d), b:=round(d, 2)})", NUMS);
     assert_eq!(
         sql,
-        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select v_1, v_2, round(v_2) as v_3, round(v_2, cast('2' as integer)) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
+        r#"select v_1 as "i", v_2 as "d", v_3 as "a", v_4 as "b" from (select v_1, v_2, round(v_2) as v_3, round(v_2, 2) as v_4 from (select "i" as v_1, "d" as v_2 from "nums") s) s"#
     );
 }
 
@@ -213,7 +213,7 @@ fn datetime_arithmetic() {
     );
     assert_eq!(
         sql,
-        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "diff", v_5 as "added", v_6 as "trunc" from (select v_1, v_2, v_3, date_diff('day', v_2, v_1) as v_4, date_add('hour', cast('1' as integer), v_1) as v_5, date_trunc('month', v_1) as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
+        r#"select v_1 as "ts", v_2 as "dt", v_3 as "val", v_4 as "diff", v_5 as "added", v_6 as "trunc" from (select v_1, v_2, v_3, date_diff('day', v_2, v_1) as v_4, date_add('hour', 1, v_1) as v_5, date_trunc('month', v_1) as v_6 from (select "ts" as v_1, "dt" as v_2, "val" as v_3 from "events") s) s"#
     );
 }
 
@@ -282,6 +282,6 @@ fn let_param_visible_in_qualified_table_filter() {
 
     assert_eq!(
         sql,
-        r#"select v_1 as "c" from (select count(*) as v_1 from (select * from (select "businessdate" as v_2 from "memory"."default"."risk") s where v_2 = cast('20250130' as integer)) s group by true) s"#
+        r#"select v_1 as "c" from (select count(*) as v_1 from (select * from (select "businessdate" as v_2 from "memory"."default"."risk") s where v_2 = 20250130) s group by true) s"#
     );
 }

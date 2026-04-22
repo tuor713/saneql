@@ -2730,7 +2730,7 @@ impl SemanticAnalysis {
             let offset = if bound.len() > 1 && bound[1].is_some() {
                 let ast = bound[1].as_ref().unwrap();
                 let mut er = self.analyze_expression(&pre_binding, ast).await?;
-                if !er.is_scalar() || er.expr_mut().typ().base != TypeBase::Integer {
+                if !er.is_scalar() || !er.expr_mut().typ().is_integer() {
                     return Err("lead/lag offset must be an integer".into());
                 }
                 take_expr(&mut er)
@@ -3331,6 +3331,7 @@ fn a(name: &str, category: TypeCategory, has_default: bool) -> SigArg {
 fn parse_simple_type(name: &str) -> Result<Type, String> {
     match name {
         "integer" => Ok(Type::integer()),
+        "bigint" => Ok(Type::bigint()),
         "boolean" => Ok(Type::bool_()),
         "date" => Ok(Type::date()),
         "interval" => Ok(Type::interval()),
@@ -3401,8 +3402,8 @@ fn enforce_comparable_exprs(a: &mut Box<Expr>, b: &mut Box<Expr>) -> Result<(), 
 
     let ok = match at.base {
         TypeBase::Bool => bt.base == TypeBase::Bool,
-        TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. } => {
-            matches!(bt.base, TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. })
+        TypeBase::Integer | TypeBase::Bigint | TypeBase::Double | TypeBase::Decimal { .. } => {
+            matches!(bt.base, TypeBase::Integer | TypeBase::Bigint | TypeBase::Double | TypeBase::Decimal { .. })
         }
         TypeBase::Char { .. } | TypeBase::Varchar { .. } | TypeBase::Text => matches!(
             bt.base,

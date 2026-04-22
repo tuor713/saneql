@@ -20,6 +20,7 @@ pub enum TypeBase {
     Unknown,
     Bool,
     Integer,
+    Bigint,
     Double,
     Decimal { precision: u32, scale: u32 },
     Char { len: u32 },
@@ -54,6 +55,12 @@ impl Type {
     pub fn integer() -> Self {
         Self {
             base: TypeBase::Integer,
+            nullable: false,
+        }
+    }
+    pub fn bigint() -> Self {
+        Self {
+            base: TypeBase::Bigint,
             nullable: false,
         }
     }
@@ -122,7 +129,10 @@ impl Type {
 
     // ── kind helpers ──────────────────────────────────────────────────────
     pub fn is_numeric(self) -> bool {
-        matches!(self.base, TypeBase::Integer | TypeBase::Double | TypeBase::Decimal { .. })
+        matches!(self.base, TypeBase::Integer | TypeBase::Bigint | TypeBase::Double | TypeBase::Decimal { .. })
+    }
+    pub fn is_integer(self) -> bool {
+        matches!(self.base, TypeBase::Integer | TypeBase::Bigint)
     }
     pub fn is_temporal(self) -> bool {
         matches!(self.base, TypeBase::Date | TypeBase::Timestamp)
@@ -138,6 +148,7 @@ impl Type {
             TypeBase::Unknown => "unknown",
             TypeBase::Bool => "boolean",
             TypeBase::Integer => "integer",
+            TypeBase::Bigint => "bigint",
             TypeBase::Double => "double",
             TypeBase::Decimal { .. } => "decimal",
             TypeBase::Char { .. } => "char",
@@ -237,8 +248,8 @@ pub fn parse_type_str(s: &str) -> Option<Type> {
 
     // Plain keyword types
     Some(match lower {
-        "integer" | "int" | "int4" | "bigint" | "int8" | "smallint" | "int2"
-        | "tinyint" => Type::integer(),
+        "integer" | "int" | "int4" | "smallint" | "int2" | "tinyint" => Type::integer(),
+        "bigint" | "int8" => Type::bigint(),
         "boolean" | "bool" => Type::bool_(),
         "text" | "string" => Type::text(),
         "varchar" | "character varying" => Type::text(), // unbounded
