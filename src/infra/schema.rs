@@ -9,8 +9,9 @@ use std::pin::Pin;
 ///
 /// `lookup_table` returns a boxed future so the trait remains object-safe
 /// (`Box<dyn SchemaProvider>`) while still supporting async implementations.
+/// Returns `Ok(None)` when the table is not found, `Err(msg)` on lookup failure.
 pub trait SchemaProvider {
-    fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>>;
+    fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Result<Option<Table>, String>> + 'a>>;
 }
 
 
@@ -205,8 +206,8 @@ impl Schema {
 }
 
 impl SchemaProvider for Schema {
-    fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>> {
-        Box::pin(async move { self.tables.get(name).cloned() })
+    fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Result<Option<Table>, String>> + 'a>> {
+        Box::pin(async move { Ok(self.tables.get(name).cloned()) })
     }
 }
 

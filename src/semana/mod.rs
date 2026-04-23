@@ -450,7 +450,7 @@ impl SemanticAnalysis {
         let table = self
             .schema
             .lookup_table(&lookup_key)
-            .await
+            .await?
             .ok_or_else(|| format!("unknown table '{lookup_key}'"))?;
         let table_cols: Vec<_> = table
             .columns
@@ -697,7 +697,7 @@ impl SemanticAnalysis {
         if let Some(mut parts) = Self::extract_dotted_parts(base_ast) {
             parts.push(col_name.clone());
             let lookup_key = parts.join(".");
-            if self.schema.lookup_table(&lookup_key).await.is_some() {
+            if self.schema.lookup_table(&lookup_key).await?.is_some() {
                 return self.make_table_scan(scope, parts).await;
             }
         }

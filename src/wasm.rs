@@ -43,6 +43,14 @@ mod inner {
     ///   `(tableName: string) => Promise<Array<{name: string, type: string}> | null>`.
     ///   Called lazily for each table referenced in the query.
     ///   Return `null` (or `undefined`) if the table does not exist.
+    fn js_err_to_string(table: &str, e: JsValue) -> String {
+        let msg = js_sys::Error::from(e)
+            .message()
+            .as_string()
+            .unwrap_or_else(|| "unknown error".into());
+        format!("error retrieving schema for table '{}': {}", table, msg)
+    }
+
     #[wasm_bindgen]
     pub async fn compile(query: &str, get_columns: Function) -> Result<String, JsError> {
         struct JsProvider(Function);
@@ -51,35 +59,41 @@ mod inner {
             fn lookup_table<'a>(
                 &'a self,
                 name: &'a str,
-            ) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>> {
+            ) -> Pin<Box<dyn Future<Output = Result<Option<Table>, String>> + 'a>> {
                 Box::pin(async move {
                     log!("[saneql] looking up table: {}", name);
                     let promise = self
                         .0
                         .call1(&JsValue::NULL, &JsValue::from_str(name))
-                        .ok()?;
-                    let result = JsFuture::from(Promise::from(promise)).await.ok()?;
+                        .map_err(|e| js_err_to_string(name, e))?;
+                    let result = JsFuture::from(Promise::from(promise))
+                        .await
+                        .map_err(|e| js_err_to_string(name, e))?;
 
-                    // null / undefined → table not found
+                    // null / undefined → table does not exist
                     if result.is_null() || result.is_undefined() {
-                        log!("[saneql] table '{}' not found (callback returned null/undefined)", name);
-                        return None;
+                        return Err(format!("table '{}' not found", name));
                     }
 
                     // Expect an Array of {name, type} objects.
                     let arr = Array::from(&result);
                     let mut columns = Vec::new();
                     for item in arr.iter() {
-                        let obj: &Object = item.dyn_ref::<Object>()?;
-                        let name_val = Reflect::get(obj, &JsString::from("name")).ok()?;
-                        let type_val = Reflect::get(obj, &JsString::from("type")).ok()?;
-                        let col_name = name_val.as_string()?;
-                        let type_str = type_val.as_string()?;
+                        let obj: &Object = item.dyn_ref::<Object>()
+                            .ok_or_else(|| format!("column descriptor for table '{}' is not an object", name))?;
+                        let name_val = Reflect::get(obj, &JsString::from("name"))
+                            .map_err(|e| format!("missing 'name' field in column descriptor for table '{}': {:?}", name, e))?;
+                        let type_val = Reflect::get(obj, &JsString::from("type"))
+                            .map_err(|e| format!("missing 'type' field in column descriptor for table '{}': {:?}", name, e))?;
+                        let col_name = name_val.as_string()
+                            .ok_or_else(|| format!("'name' field is not a string in column descriptor for table '{}'", name))?;
+                        let type_str = type_val.as_string()
+                            .ok_or_else(|| format!("'type' field is not a string in column descriptor for table '{}'", name))?;
                         let typ = parse_type_str(&type_str).unwrap_or_else(Type::unknown);
                         columns.push(Column { name: col_name, typ });
                     }
                     log!("[saneql] resolved table '{}': {} column(s)", name, columns.len());
-                    Some(Table { columns })
+                    Ok(Some(Table { columns }))
                 })
             }
         }

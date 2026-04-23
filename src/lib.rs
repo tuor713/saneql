@@ -171,9 +171,9 @@ where
 {
     struct CallbackProvider<F>(F);
     impl<F: Fn(&str) -> Option<Vec<(String, String)>> + 'static> SchemaProvider for CallbackProvider<F> {
-        fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Option<Table>> + 'a>> {
+        fn lookup_table<'a>(&'a self, name: &'a str) -> Pin<Box<dyn Future<Output = Result<Option<Table>, String>> + 'a>> {
             Box::pin(async move {
-                let cols = (self.0)(name)?;
+                let Some(cols) = (self.0)(name) else { return Ok(None) };
                 let columns = cols
                     .into_iter()
                     .map(|(col_name, type_str)| {
@@ -181,7 +181,7 @@ where
                         Column { name: col_name, typ }
                     })
                     .collect();
-                Some(Table { columns })
+                Ok(Some(Table { columns }))
             })
         }
     }
