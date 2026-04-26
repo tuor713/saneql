@@ -285,3 +285,188 @@ fn let_param_visible_in_qualified_table_filter() {
         r#"select v_1 as "c" from (select count(*) as v_1 from (select * from (select "businessdate" as v_2 from "memory"."default"."risk") s where v_2 = 20250130) s group by true) s"#
     );
 }
+
+// ---------------------------------------------------------------------------
+// String functions
+// ---------------------------------------------------------------------------
+
+const STRS: &[(&str, &[(&str, &str)])] = &[(
+    "strs",
+    &[("s", "varchar"), ("t", "varchar"), ("n", "integer")],
+)];
+
+/// lower, upper, ltrim, rtrim, trim, reverse, soundex → varchar.
+#[test]
+fn string_single_arg_varchar() {
+    let sql = compile(
+        r#"strs.map({a:=lower(s), b:=upper(s), c:=ltrim(s), d:=rtrim(s), e:=trim(s), f:=reverse(s), g:=soundex(s)})"#,
+        STRS,
+    );
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a", v_5 as "b", v_6 as "c", v_7 as "d", v_8 as "e", v_9 as "f", v_10 as "g" from (select v_1, v_2, v_3, lower(v_1) as v_4, upper(v_1) as v_5, ltrim(v_1) as v_6, rtrim(v_1) as v_7, trim(v_1) as v_8, reverse(v_1) as v_9, soundex(v_1) as v_10 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// length, codepoint → bigint.
+#[test]
+fn string_single_arg_bigint() {
+    let sql = compile(r#"strs.map({a:=length(s), b:=codepoint(s)})"#, STRS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a", v_5 as "b" from (select v_1, v_2, v_3, length(v_1) as v_4, codepoint(v_1) as v_5 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// chr(integer) → varchar.
+#[test]
+fn string_chr() {
+    let sql = compile(r#"strs.map({a:=chr(n)})"#, STRS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, chr(v_3) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// luhn_check(varchar) → boolean.
+#[test]
+fn string_luhn_check() {
+    let sql = compile(r#"strs.map({a:=luhn_check(s)})"#, STRS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, luhn_check(v_1) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// starts_with(string, substring) → boolean.
+#[test]
+fn string_starts_with() {
+    let sql = compile(r#"strs.map({a:=starts_with(s, 'he')})"#, STRS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, starts_with(v_1, 'he') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// levenshtein_distance, hamming_distance → bigint.
+#[test]
+fn string_distance_functions() {
+    let sql = compile(
+        r#"strs.map({a:=levenshtein_distance(s, t), b:=hamming_distance(s, t)})"#,
+        STRS,
+    );
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a", v_5 as "b" from (select v_1, v_2, v_3, levenshtein_distance(v_1, v_2) as v_4, hamming_distance(v_1, v_2) as v_5 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// strpos with 2 and 3 arguments → bigint.
+#[test]
+fn string_strpos() {
+    let sql2 = compile(r#"strs.map({a:=strpos(s, t)})"#, STRS);
+    assert_eq!(
+        sql2,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, strpos(v_1, v_2) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+    let sql3 = compile(r#"strs.map({a:=strpos(s, t, 2)})"#, STRS);
+    assert_eq!(
+        sql3,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, strpos(v_1, v_2, 2) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// replace with 2 and 3 arguments → varchar.
+#[test]
+fn string_replace() {
+    let sql2 = compile(r#"strs.map({a:=replace(s, t)})"#, STRS);
+    assert_eq!(
+        sql2,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, replace(v_1, v_2) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+    let sql3 = compile(r#"strs.map({a:=replace(s, t, 'x')})"#, STRS);
+    assert_eq!(
+        sql3,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, replace(v_1, v_2, 'x') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// word_stem with 1 and 2 arguments → varchar.
+#[test]
+fn string_word_stem() {
+    let sql1 = compile(r#"strs.map({a:=word_stem(s)})"#, STRS);
+    assert_eq!(
+        sql1,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, word_stem(v_1) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+    let sql2 = compile(r#"strs.map({a:=word_stem(s, 'en')})"#, STRS);
+    assert_eq!(
+        sql2,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, word_stem(v_1, 'en') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// substring with 2 and 3 arguments → varchar.
+#[test]
+fn string_substring() {
+    let sql2 = compile(r#"strs.map({a:=substring(s, 2)})"#, STRS);
+    assert_eq!(
+        sql2,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, substring(v_1, 2) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+    let sql3 = compile(r#"strs.map({a:=substring(s, 2, 3)})"#, STRS);
+    assert_eq!(
+        sql3,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, substring(v_1, 2, 3) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// lpad and rpad (3 args) → varchar.
+#[test]
+fn string_pad() {
+    let lpad = compile(r#"strs.map({a:=lpad(s, 10, '0')})"#, STRS);
+    assert_eq!(
+        lpad,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, lpad(v_1, 10, '0') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+    let rpad = compile(r#"strs.map({a:=rpad(s, 10, '0')})"#, STRS);
+    assert_eq!(
+        rpad,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, rpad(v_1, 10, '0') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// translate(source, from, to) → varchar.
+#[test]
+fn string_translate() {
+    let sql = compile(r#"strs.map({a:=translate(s, 'abc', 'xyz')})"#, STRS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, translate(v_1, 'abc', 'xyz') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// split_part(string, delimiter, index) → varchar.
+#[test]
+fn string_split_part() {
+    let sql = compile(r#"strs.map({a:=split_part(s, ',', 1)})"#, STRS);
+    assert_eq!(
+        sql,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, split_part(v_1, ',', 1) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}
+
+/// concat with 2 and 3 arguments → varchar.
+#[test]
+fn string_concat() {
+    let sql2 = compile(r#"strs.map({a:=concat(s, t)})"#, STRS);
+    assert_eq!(
+        sql2,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, concat(v_1, v_2) as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+    let sql3 = compile(r#"strs.map({a:=concat(s, t, '!')})"#, STRS);
+    assert_eq!(
+        sql3,
+        r#"select v_1 as "s", v_2 as "t", v_3 as "n", v_4 as "a" from (select v_1, v_2, v_3, concat(v_1, v_2, '!') as v_4 from (select "s" as v_1, "t" as v_2, "n" as v_3 from "strs") s) s"#
+    );
+}

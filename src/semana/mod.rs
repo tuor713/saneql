@@ -1675,6 +1675,261 @@ impl SemanticAnalysis {
                 })));
             }
 
+            // ── string: single-arg → varchar ──────────────────────────────
+            "lower" | "upper" | "ltrim" | "rtrim" | "trim" | "reverse" | "soundex" => {
+                let e = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::text(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: single-arg → bigint ───────────────────────────────
+            "length" | "codepoint" => {
+                let e = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::bigint(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: chr (integer → varchar) ───────────────────────────
+            "chr" => {
+                let e = take_expr(
+                    &mut self.eval_scalar_arg(scope, "n", name, &bound[0]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "chr".to_string(),
+                    typ: Type::text(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: luhn_check (varchar → boolean) ────────────────────
+            "luhn_check" => {
+                let e = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "luhn_check".to_string(),
+                    typ: Type::bool_(),
+                    args: vec![e],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: two-arg → boolean ─────────────────────────────────
+            "starts_with" => {
+                let s = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                let sub = take_expr(
+                    &mut self.eval_scalar_arg(scope, "substring", name, &bound[1]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "starts_with".to_string(),
+                    typ: Type::bool_(),
+                    args: vec![s, sub],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: two-arg → bigint ──────────────────────────────────
+            "levenshtein_distance" | "hamming_distance" => {
+                let s1 = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string1", name, &bound[0]).await?,
+                );
+                let s2 = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string2", name, &bound[1]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::bigint(),
+                    args: vec![s1, s2],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: strpos (2 or 3 args → bigint) ─────────────────────
+            "strpos" => {
+                let s = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                let sub = take_expr(
+                    &mut self.eval_scalar_arg(scope, "substring", name, &bound[1]).await?,
+                );
+                let mut args = vec![s, sub];
+                if let Some(_) = &bound[2] {
+                    let inst = take_expr(
+                        &mut self.eval_scalar_arg(scope, "instance", name, &bound[2]).await?,
+                    );
+                    args.push(inst);
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "strpos".to_string(),
+                    typ: Type::bigint(),
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: replace (2 or 3 args → varchar) ───────────────────
+            "replace" => {
+                let s = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                let search = take_expr(
+                    &mut self.eval_scalar_arg(scope, "search", name, &bound[1]).await?,
+                );
+                let mut args = vec![s, search];
+                if let Some(_) = &bound[2] {
+                    let rep = take_expr(
+                        &mut self.eval_scalar_arg(scope, "replace", name, &bound[2]).await?,
+                    );
+                    args.push(rep);
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "replace".to_string(),
+                    typ: Type::text(),
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: word_stem (1 or 2 args → varchar) ─────────────────
+            "word_stem" => {
+                let w = take_expr(
+                    &mut self.eval_scalar_arg(scope, "word", name, &bound[0]).await?,
+                );
+                let mut args = vec![w];
+                if let Some(_) = &bound[1] {
+                    let lang = take_expr(
+                        &mut self.eval_scalar_arg(scope, "lang", name, &bound[1]).await?,
+                    );
+                    args.push(lang);
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "word_stem".to_string(),
+                    typ: Type::text(),
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: substring free function (2 or 3 args → varchar) ──
+            "substring" => {
+                let s = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                let start = take_expr(
+                    &mut self.eval_scalar_arg(scope, "start", name, &bound[1]).await?,
+                );
+                let mut args = vec![s, start];
+                if let Some(_) = &bound[2] {
+                    let len = take_expr(
+                        &mut self.eval_scalar_arg(scope, "length", name, &bound[2]).await?,
+                    );
+                    args.push(len);
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::text(),
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: lpad / rpad (3 args → varchar) ────────────────────
+            "lpad" | "rpad" => {
+                let s = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                let size = take_expr(
+                    &mut self.eval_scalar_arg(scope, "size", name, &bound[1]).await?,
+                );
+                let pad = take_expr(
+                    &mut self.eval_scalar_arg(scope, "padstring", name, &bound[2]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: name.to_string(),
+                    typ: Type::text(),
+                    args: vec![s, size, pad],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: translate (3 args → varchar) ──────────────────────
+            "translate" => {
+                let src = take_expr(
+                    &mut self.eval_scalar_arg(scope, "source", name, &bound[0]).await?,
+                );
+                let from = take_expr(
+                    &mut self.eval_scalar_arg(scope, "from", name, &bound[1]).await?,
+                );
+                let to = take_expr(
+                    &mut self.eval_scalar_arg(scope, "to", name, &bound[2]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "translate".to_string(),
+                    typ: Type::text(),
+                    args: vec![src, from, to],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: split_part (3 args → varchar) ─────────────────────
+            "split_part" => {
+                let s = take_expr(
+                    &mut self.eval_scalar_arg(scope, "string", name, &bound[0]).await?,
+                );
+                let delim = take_expr(
+                    &mut self.eval_scalar_arg(scope, "delimiter", name, &bound[1]).await?,
+                );
+                let idx = take_expr(
+                    &mut self.eval_scalar_arg(scope, "index", name, &bound[2]).await?,
+                );
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "split_part".to_string(),
+                    typ: Type::text(),
+                    args: vec![s, delim, idx],
+                    call_type: CallType::Function,
+                })));
+            }
+
+            // ── string: concat (variadic, 2..5 args → varchar) ────────────
+            "concat" => {
+                let s1 = take_expr(
+                    &mut self.eval_scalar_arg(scope, "s1", name, &bound[0]).await?,
+                );
+                let s2 = take_expr(
+                    &mut self.eval_scalar_arg(scope, "s2", name, &bound[1]).await?,
+                );
+                let mut args = vec![s1, s2];
+                for (i, arg_name) in [(2usize, "s3"), (3, "s4"), (4, "s5")] {
+                    if bound[i].is_some() {
+                        let e = take_expr(
+                            &mut self.eval_scalar_arg(scope, arg_name, name, &bound[i]).await?,
+                        );
+                        args.push(e);
+                    }
+                }
+                return Ok(ExpressionResult::scalar(Box::new(Expr::ForeignCall {
+                    name: "concat".to_string(),
+                    typ: Type::text(),
+                    args,
+                    call_type: CallType::Function,
+                })));
+            }
+
             // ── foreigncall ───────────────────────────────────────────────
             "foreigncall" => {
                 return self.analyze_foreign_call(scope, sig, &bound).await;
@@ -3251,6 +3506,78 @@ fn free_function_sig(name: &str) -> Option<Signature> {
 
         // ── datetime: date_trunc(unit, value) → same type ─────────────────
         "date_trunc" => vec![a("unit", Scalar, false), a("value", Scalar, false)],
+
+        // ── string: single-arg → varchar ──────────────────────────────────
+        "lower" | "upper" | "ltrim" | "rtrim" | "trim" | "reverse" | "soundex" => {
+            vec![a("string", Scalar, false)]
+        }
+
+        // ── string: single-arg → bigint ───────────────────────────────────
+        "length" | "codepoint" => vec![a("string", Scalar, false)],
+
+        // ── string: chr (integer → varchar) ───────────────────────────────
+        "chr" => vec![a("n", Scalar, false)],
+
+        // ── string: luhn_check (varchar → boolean) ────────────────────────
+        "luhn_check" => vec![a("string", Scalar, false)],
+
+        // ── string: two-arg → boolean ─────────────────────────────────────
+        "starts_with" => vec![a("string", Scalar, false), a("substring", Scalar, false)],
+
+        // ── string: two-arg → bigint ──────────────────────────────────────
+        "levenshtein_distance" | "hamming_distance" => {
+            vec![a("string1", Scalar, false), a("string2", Scalar, false)]
+        }
+
+        // ── string: strpos (2 or 3 args → bigint) ─────────────────────────
+        "strpos" => vec![
+            a("string", Scalar, false),
+            a("substring", Scalar, false),
+            a("instance", Scalar, true),
+        ],
+
+        // ── string: replace (2 or 3 args → varchar) ───────────────────────
+        "replace" => vec![
+            a("string", Scalar, false),
+            a("search", Scalar, false),
+            a("replace", Scalar, true),
+        ],
+
+        // ── string: word_stem (1 or 2 args → varchar) ─────────────────────
+        "word_stem" => vec![a("word", Scalar, false), a("lang", Scalar, true)],
+
+        // ── string: substring free function (2 or 3 args → varchar) ──────
+        "substring" => vec![
+            a("string", Scalar, false),
+            a("start", Scalar, false),
+            a("length", Scalar, true),
+        ],
+
+        // ── string: three-arg → varchar ───────────────────────────────────
+        "lpad" | "rpad" => vec![
+            a("string", Scalar, false),
+            a("size", Scalar, false),
+            a("padstring", Scalar, false),
+        ],
+        "translate" => vec![
+            a("source", Scalar, false),
+            a("from", Scalar, false),
+            a("to", Scalar, false),
+        ],
+        "split_part" => vec![
+            a("string", Scalar, false),
+            a("delimiter", Scalar, false),
+            a("index", Scalar, false),
+        ],
+
+        // ── string: concat (variadic, 2..5 args → varchar) ────────────────
+        "concat" => vec![
+            a("s1", Scalar, false),
+            a("s2", Scalar, false),
+            a("s3", Scalar, true),
+            a("s4", Scalar, true),
+            a("s5", Scalar, true),
+        ],
 
         _ => return None,
     };
